@@ -10,6 +10,7 @@ edition = "2018"
 x86_64 = {path = "../../Libraries/x86_64", features=["const_fn"]}
 spin = {version="0.9.2", default-features=false, features=["mutex", "spin_mutex"]}
 linked_list_allocator = {path = "../../Libraries/linked-list-allocator"}
+macros = {path="./src/macros"}
 
 # [patch.crates-io]
 # x86_64 = { path = "../../Libraries/x86_64" }

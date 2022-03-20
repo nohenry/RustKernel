@@ -30,7 +30,51 @@ pub struct SystemTable {
     runtime_services: *const u8,
     boot_services: *const BootServices,
     entry_count: usize,
-    configuration_table: *const u8,
+    configuration_table: *const  ConfigurationTable,
+}
+
+impl SystemTable {
+    pub fn config_tables(&self) -> ConfigurationTableIterator {
+        ConfigurationTableIterator::new(self.configuration_table, self.entry_count)
+    }
+}
+
+struct ConfigurationTable {
+    guid: guid::GUID,
+    ptr: *const ()
+}
+
+pub struct ConfigurationTableIterator {
+    configuration_base: *const ConfigurationTable,
+    size: usize,
+    index: usize,
+}
+
+impl  ConfigurationTableIterator {
+    fn new(configuration_base: *const ConfigurationTable, size: usize) -> ConfigurationTableIterator {
+        ConfigurationTableIterator {
+            configuration_base,
+            size,
+            index: 0
+        }
+    }
+}
+
+impl Iterator for ConfigurationTableIterator {
+    type Item = (&'static guid::GUID, *const ());
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.size {
+            let ret = unsafe {
+                let table = &*self.configuration_base.offset(self.index as _);
+                Some((&table.guid, table.ptr))
+            };
+            self.index += 1;
+            ret
+        } else {
+            None
+        }
+    }
 }
 
 #[repr(C)]
@@ -234,29 +278,29 @@ pub fn get_memory_map(image_handle: Handle) -> MemoryMap {
 
         assert!(result == 0, " {:x?} {:x}", result, BUFFER_TOO_SMALL);
 
-        // let mut conventional = 0;
-        // let mut all = 0;
+        let mut conventional = 0;
+        let mut all = 0;
 
-        // for desc in &DESCRIPTORS {
-        //     if desc.physical_address == 0 && desc.virtual_address == 0 && desc.size == 0 {
-        //         break;
-        //     }
+        for desc in &DESCRIPTORS {
+            if desc.physical_address == 0 && desc.virtual_address == 0 && desc.size == 0 {
+                break;
+            }
 
-        //     if desc.memory_type.is_usable() {
-        //         all += desc.size * 4096;
-        //     }
-        //     if let MemoryType::Conventional = desc.memory_type {
-        //         conventional += desc.size * 4096;
-        //     }
+            if desc.memory_type.is_usable() {
+                all += desc.size * 4096;
+            }
+            if let MemoryType::Conventional = desc.memory_type {
+                conventional += desc.size * 4096;
+            }
 
-        //     kprintln!(
-        //         "{:016x} {:016x} {:?}\n",
-        //         desc.physical_address,
-        //         desc.size * 4096,
-        //         desc.memory_type
-        //     );
-        //     kprintln!("{:x?}", desc);
-        // }
+            kprintln!(
+                "{:016x} {:016x} {:?}",
+                desc.physical_address,
+                desc.size * 4096,
+                desc.memory_type
+            );
+            // kprintln!("{:x?}", desc);
+        }
 
         let result = ((*(*table).boot_services).exit_boot_services)(image_handle, key);
         assert!(result == 0, "Unable to exit boot services! {:x}", result);
@@ -282,7 +326,11 @@ pub fn get_image_base(image_handle: Handle) -> usize {
     }
 }
 
-mod guid {
+pub mod guid {
+    
+    pub use macros::create_guid;
+
+    #[derive(PartialEq)]
     pub struct GUID {
         a: u32,
         /// The middle field of the timestamp.
@@ -295,12 +343,14 @@ mod guid {
         /// - The spatially unique node identifier.
         d: [u8; 8],
     }
-    // pub type GUID = [u8; 16];
 
-    pub const LOADED_IMAGE_PROTOCOL: GUID = GUID {
-        a: 0x5B1B31A1,
-        b: 0x9562,
-        c: 0x11d2,
-        d: [0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B],
-    };
+    impl <'a> PartialEq<GUID> for &'a GUID {
+        fn eq(&self, other: &GUID) -> bool {
+            self.a == other.a && self.b == other.b && self.c == other.c && self.d == other.d
+        }
+    }
+
+    pub const LOADED_IMAGE_PROTOCOL: GUID = create_guid!(5B1B31A1-9562-11d2-8E3F-00A0C969723B);
+
+    pub const RSDP: GUID = create_guid!(8868E871-E4F1-11D3-BC22-0080C73C8881);
 }

@@ -5,6 +5,7 @@
 #![feature(alloc_error_handler)]
 #![feature(const_fn)]
 #![feature(asm)]
+#![feature(naked_functions)]
 #![allow(unused)]
 
 extern crate alloc;
@@ -18,6 +19,7 @@ mod gdt;
 mod interrupts;
 mod mem;
 mod processes;
+mod acpi;
 
 use core::panic::PanicInfo;
 
@@ -32,21 +34,19 @@ use crate::processes::{test_process, Process};
 
 #[no_mangle]
 extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::SystemTable) {
-
     unsafe {
         // Set the static system table reference
         efi::register_global_system_table(system_table).unwrap();
     }
 
     let base = efi::get_image_base(image_handle);
-
-
     kprintln!("Entry: {:x}", base);
-    let wait = true;
+
+    acpi::init();
+    
+    let wait = false;
     while wait {
-        unsafe {
-            asm!("pause")
-        }
+        unsafe { asm!("pause") }
     }
 
     // Iterate memorymap and exit boot services
@@ -72,28 +72,27 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
             Cr3Flags::empty(),
         );
         mem::KERNEL_MAP = table as u64;
-        kprintln!("KMAP {:x}", mem::KERNEL_MAP);
-        // mem::KERNEL_MAP.store(table, core::sync::atomic::Ordering::SeqCst);
     }
 
     allocator::init_heap(&mut mapper, &mut frame_allocator, false).expect("Unable to create heap!");
 
-    let addresses = [processes::test_process as u64]; // same as before
+    // let addresses = [processes::test_process as u64]; // same as before
 
-    for &address in &addresses {
-        let virt = VirtAddr::new(address);
-        let res = mapper.translate(virt);
-        match res {
-            TranslateResult::Mapped { frame, flags, .. } => {
-                kprintln!("Frame: {:#x?} {:?}", frame, flags);
-            }
-            _ => (),
-        }
-    }
+    // for &address in &addresses {
+    //     let virt = VirtAddr::new(address);
+    //     let res = mapper.translate(virt);
+    //     match res {
+    //         TranslateResult::Mapped { frame, flags, .. } => {
+    //             kprintln!("Frame: {:#x?} {:?}", frame, flags);
+    //         }
+    //         _ => (),
+    //     }
+    // }
+
+    processes::set_syscall_sp();
 
     let new_process = Process::new(test_process, &mut frame_allocator);
 
-    processes::set_syscall_sp();
     unsafe {
         processes::jump_usermode(&mapper, &new_process);
     }

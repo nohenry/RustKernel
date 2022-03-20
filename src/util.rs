@@ -150,5 +150,5 @@ pub struct CpuState {
 
     rip: u64,
 
-    flags: u64
+    flags: u64,
 }

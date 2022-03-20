@@ -1,13 +1,16 @@
-use core::{marker::PhantomData};
+use core::marker::PhantomData;
 
-use crate::mem;
-use alloc::{boxed::Box};
+use crate::{interrupts::{IDT, CpuSnapshot}, mem, interrupt_begin, interrupt_end};
+use alloc::{boxed::Box, string::String};
 // use x86_64::structures::paging::PageTable;
 use x86_64::{
     registers::control::{Cr3, Cr3Flags},
-    structures::paging::{
-        FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame,
-        Size4KiB, Translate,
+    structures::{
+        idt::InterruptDescriptorTable,
+        paging::{
+            FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame,
+            Size4KiB, Translate,
+        },
     },
     PhysAddr, VirtAddr,
 };
@@ -22,11 +25,14 @@ const PROCESS_STACK_ADDRESS: usize = 0x844_4444_0000;
 
 pub static mut SYSCALL_SP: u64 = 0x0;
 pub static mut SYSCALL_USP: u64 = 0x0;
+pub static mut SYSCALL_UMAP: u64 = 0x0;
 
 #[inline(always)]
 pub fn set_syscall_sp() {
     unsafe { asm!("mov {}, rsp", out(reg) SYSCALL_SP) }
-    unsafe { kprintln!("SP {:x}", SYSCALL_SP);} 
+    unsafe {
+        kprintln!("SP {:x}", SYSCALL_SP);
+    }
 }
 
 #[derive(Debug)]
@@ -74,12 +80,32 @@ impl Process {
         let kernel_code_frames =
             PhysFrame::<Size4KiB>::range_inclusive(kernel_code_start, kernel_code_end);
 
+        let kernel_stack_start =
+            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(unsafe { SYSCALL_SP } - 4 * 4096));
+        let kernel_stack_end = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(
+            unsafe { SYSCALL_SP },
+        ));
+        let kernel_stack_frames =
+            PhysFrame::<Size4KiB>::range_inclusive(kernel_stack_start, kernel_stack_end);
+
         unsafe {
             for frame in kernel_code_frames {
                 mapper
                     .identity_map(
                         frame,
-                        PageTableFlags::USER_ACCESSIBLE | PageTableFlags::PRESENT,
+                        // For now the test process is in kernel code so user accessable flag is set
+                        PageTableFlags::USER_ACCESSIBLE | PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                        frame_allocator,
+                    )
+                    .expect("Unable to identity map!")
+                    .flush();
+            }
+
+            for frame in kernel_stack_frames {
+                mapper
+                    .identity_map(
+                        frame,
+                        PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
                         frame_allocator,
                     )
                     .expect("Unable to identity map!")
@@ -96,11 +122,6 @@ impl Process {
         }
     }
 }
-
-// #[inline(always)]
-// pub fn syscall() {
-//     unsafe { asm!("syscall") }
-// }
 
 enum SyscallType {
     Write,
@@ -181,9 +202,9 @@ impl<'a> Syscall<'a, Four> {
 }
 
 pub fn test_process() {
+    // let pf = idt.page_fault;
     loop {
-        // Syscall::<SNone>::syscall(SyscallType::Unknown);
-        // let string = String::from("Potato\n");
+        Syscall::<SNone>::syscall(SyscallType::Unknown);
         // let string = "Potato\n";
         // Syscall::<Two>::syscall(
         //     SyscallType::Write,
@@ -193,114 +214,61 @@ pub fn test_process() {
     }
 }
 
+#[naked]
 unsafe fn syscall_entry_stub() {
-    asm!(
-        "
-        push rax
-        push rbx
-        push rcx
-        push rdx
+    interrupt_begin!();
 
-        push rsi
-        push rdi
+    let mut cpu: *const CpuSnapshot = core::ptr::null_mut();
 
-        push r8
-        push r9
-        push r10
-        push r11
-        push r12
-        push r13
-        push r14
-        push r15
+    asm!("mov rdx, rsp", options(nomem, nostack)); // Save old stack
+    asm!("mov rsp, rax; mov rbp, rsp", in("rax") SYSCALL_SP, options(nostack)); // Load kernel stack
+    asm!("", out("rdx") SYSCALL_USP, options(nostack)); // Save old stack into variable for later
+    asm!("", out("rdx") cpu, options(nostack)); // Load address into pointer for cpu snapshot
 
-        push rbp
-        ",
-        options(nostack)
-    );
+    asm!("mov rax, cr3", out("rax") SYSCALL_UMAP, options(nostack)); // Save old address space
 
-    asm!("mov rdx, rsp", options(nostack));
-    asm!("mov rsp, {}", in(reg) SYSCALL_SP, options(nostack));
+    syscall_entry(&*cpu);
 
-    asm!("mov rsi, cr3", options(nostack));
-    asm!("mov cr3, {}", in(reg) mem::KERNEL_MAP, options(nostack));
-    asm!("mov {}, rdx", out(reg) SYSCALL_USP, options(nostack));
+    asm!("mov cr3, rax", in("rax") SYSCALL_UMAP, options(nostack));
+    asm!("mov rsp, rax", in("rax") SYSCALL_USP, options(nostack));
 
-    asm!("
-        push rsi
-        call {}
-        pop rsi
-        ", sym syscall_entry, options(nostack));
+    interrupt_end!();
 
-    asm!("mov cr3, rsi", options(nostack));
-    asm!("mov rsp, {}", in(reg) SYSCALL_USP, options(nostack));
-
-    asm!(
-        "
-        pop rbp
-        
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop rax
-        pop r10
-        pop r9
-        pop r8
-
-        
-        pop rdi
-        pop rsi
-
-        pop rdx
-        pop rax
-        pop rbx
-        pop rax
-        sysretq
-        ",
-        options(nostack)
-    );
+    asm!("sysretq", options(noreturn));
 }
 
-fn syscall_entry() {
-    let return_address = unsafe {
-        let mut val: u32;
-        asm!("", out("ecx") val);
-        val
-    };
-    let flags = unsafe {
-        let mut val: u64;
-        asm!("", out("r11") val);
-        val
-    };
-    let syscall_type: u64;
-    let p1: u64;
-    let p2: u64;
-    let p3: u64;
-    let p4: u64;
-    unsafe {
-        asm!("", out("rdi") syscall_type, out("r8") p1, out("r9") p2, out("r10") p3, out("r12") p4)
-    }
-    let syscall_type = SyscallType::from(syscall_type);
+fn syscall_entry(cpu: &CpuSnapshot) {
+    kprint!(".")
+    // let syscall_type = cpu.rdi;
+    // let syscall_type = SyscallType::from(syscall_type);
 
-    match syscall_type {
-        SyscallType::Write => {
-            let string = unsafe {
-                core::str::from_utf8(core::slice::from_raw_parts(p1 as *const u8, p2 as usize))
-            }
-            .unwrap();
-            kprint!("{}", string);
-        }
-        SyscallType::Unknown => (),
-    }
-
-    unsafe { asm!("",  in("ecx") return_address, in("r11") flags ) }
+    // match syscall_type {
+    //     SyscallType::Write => {
+    //         let string = unsafe {
+    //             core::str::from_utf8(core::slice::from_raw_parts(cpu.r8 as *const u8, cpu.r9 as usize))
+    //         }
+    //         .unwrap();
+    //         kprint!("{}", string);
+    //     }
+    //     SyscallType::Unknown => (),
+    // }
 }
 
-#[inline(always)]
-pub unsafe fn jump_usermode(mapper: &OffsetPageTable, process: &Process) {
+#[inline(never)]
+pub unsafe fn jump_usermode(mapper: &OffsetPageTable, process: &Process) -> ! {
     let sepointer = syscall_entry_stub as u64;
     let lower = (sepointer & 0xFFFFFFFF) as u32;
     let upper = ((sepointer & 0xFFFFFFFF00000000) >> 32) as u32;
+
+    let ptr: *const PageTable = process.address_space.as_ref();
+
+    let frame = match mapper.translate_addr(VirtAddr::new(ptr as u64)) {
+        Some(addr) => match PhysFrame::<Size4KiB>::from_start_address(addr) {
+            Err(_) => panic!("Unable to get frame! (1)"),
+            Ok(frame) => frame,
+        },
+        None => panic!("Unable to get frame! (2)"),
+    };
 
     asm!(
         "
@@ -314,6 +282,9 @@ pub unsafe fn jump_usermode(mapper: &OffsetPageTable, process: &Process) {
     rdmsr               
     mov edx, 0x00180008
     wrmsr           	
+    mov eax, 0x200
+    mov rcx, 0xc0000084
+    wrmsr
     ",
     in("eax") lower,
     in("edx") upper,
@@ -321,15 +292,7 @@ pub unsafe fn jump_usermode(mapper: &OffsetPageTable, process: &Process) {
     in("r12") process.stack_base
     );
 
-    let ptr: *const PageTable = process.address_space.as_ref();
-
-    match mapper.translate_addr(VirtAddr::new(ptr as u64)) {
-        Some(addr) => match PhysFrame::<Size4KiB>::from_start_address(addr) {
-            Err(_) => {}
-            Ok(frame) => Cr3::write(frame, Cr3Flags::empty()),
-        },
-        None => (),
-    }
+    Cr3::write(frame, Cr3Flags::empty());
 
     asm!(
         "
@@ -337,6 +300,6 @@ pub unsafe fn jump_usermode(mapper: &OffsetPageTable, process: &Process) {
     mov rsp, r12
     mov rbp, r12
 	mov r11, 0x202 
-	sysretq ",
+	sysretq ", options(noreturn)
     );
 }

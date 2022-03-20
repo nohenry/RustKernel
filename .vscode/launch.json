@@ -4,6 +4,7 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+       
         {
             "type": "lldb",
             "request": "launch",
@@ -23,12 +24,13 @@
             "cwd": "${workspaceFolder}"
         },
         {
-            "type": "cppdbg",
+            "type": "cppvsdbg",
             "request": "launch",
-            "program": "D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-uefi\\debug\\RustKernel.efi",
+            // "program": "D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-uefi\\debug\\RustKernel.efi",
+            "program": "python",
             "name": "LLDB",
             "cwd": "${workspaceFolder}",
-            "miDebuggerServerAddress" : "localhost:1234",
+            // "miDebuggerServerAddress" : "localhost:1234",
         },
         {
             "type": "lldb",

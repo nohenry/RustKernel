@@ -1,6 +1,4 @@
-define dbg
-  source load-symbols.py
-  file
-  load-symbols $rip ./target/x86_64-unknown-uefi/debug/RustKernel.efi
-  set GDB_ATTACHED = 1
-end
+target remote 10.0.0.77:1234
+add-symbol-file ./target/x86_64-unknown-uefi/debug/RustKernel.efi 0x3e266000
+layout split
+set wait=false

@@ -18,12 +18,13 @@ struct Selectors {
     data_selector: gdt::SegmentSelector,
     tss_selector: gdt::SegmentSelector,
 }
+static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
 
 lazy_static! {
     static ref TSS: TaskStateSegment = {
         let mut tss = TaskStateSegment::new();
         tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+            kprintln!("STACK {:p}", unsafe { &STACK });
 
             let stack_start = VirtAddr::from_ptr(unsafe { &STACK });
             let stack_end = stack_start + STACK_SIZE;
