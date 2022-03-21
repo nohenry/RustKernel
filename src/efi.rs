@@ -30,7 +30,7 @@ pub struct SystemTable {
     runtime_services: *const u8,
     boot_services: *const BootServices,
     entry_count: usize,
-    configuration_table: *const  ConfigurationTable,
+    configuration_table: *mut ConfigurationTable,
 }
 
 impl SystemTable {
@@ -39,19 +39,20 @@ impl SystemTable {
     }
 }
 
+#[repr(C)]
 struct ConfigurationTable {
     guid: guid::GUID,
-    ptr: *const ()
+    ptr: *mut ()
 }
 
 pub struct ConfigurationTableIterator {
-    configuration_base: *const ConfigurationTable,
+    configuration_base: *mut ConfigurationTable,
     size: usize,
     index: usize,
 }
 
-impl  ConfigurationTableIterator {
-    fn new(configuration_base: *const ConfigurationTable, size: usize) -> ConfigurationTableIterator {
+impl ConfigurationTableIterator {
+    fn new(configuration_base: *mut ConfigurationTable, size: usize) -> ConfigurationTableIterator {
         ConfigurationTableIterator {
             configuration_base,
             size,
@@ -61,7 +62,7 @@ impl  ConfigurationTableIterator {
 }
 
 impl Iterator for ConfigurationTableIterator {
-    type Item = (&'static guid::GUID, *const ());
+    type Item = (&'static guid::GUID, *mut ());
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.size {
@@ -328,6 +329,9 @@ pub fn get_image_base(image_handle: Handle) -> usize {
 
 pub mod guid {
     
+    use core::fmt::Display;
+
+    use alloc::fmt::format;
     pub use macros::create_guid;
 
     #[derive(PartialEq)]
@@ -342,6 +346,13 @@ pub mod guid {
         /// - The low field of the clock sequence.
         /// - The spatially unique node identifier.
         d: [u8; 8],
+    }
+
+    impl Display for GUID {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(f, "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}", self.a, self.b, self.c, self.d[0], self.d[1], self.d[2], self.d[3], self.d[4], self.d[5], self.d[6], self.d[7])
+            // let dstr = self.d.iter().skip(2).map(|f| format(format_args!("{:x}", f)));
+        }
     }
 
     impl <'a> PartialEq<GUID> for &'a GUID {

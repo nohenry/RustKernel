@@ -6,6 +6,7 @@
 #![feature(const_fn)]
 #![feature(asm)]
 #![feature(naked_functions)]
+#![feature(crate_visibility_modifier)]
 #![allow(unused)]
 
 extern crate alloc;
@@ -42,12 +43,12 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
     let base = efi::get_image_base(image_handle);
     kprintln!("Entry: {:x}", base);
 
-    acpi::init();
     
     let wait = false;
     while wait {
         unsafe { asm!("pause") }
     }
+    acpi::init();
 
     // Iterate memorymap and exit boot services
     let memory_map = efi::get_memory_map(image_handle);
