@@ -7,6 +7,8 @@
 #![feature(asm)]
 #![feature(naked_functions)]
 #![feature(crate_visibility_modifier)]
+#![feature(arbitrary_enum_discriminant)]
+#![allow(unconditional_panic)]
 #![allow(unused)]
 
 extern crate alloc;
@@ -15,19 +17,21 @@ mod drivers;
 mod efi;
 #[macro_use]
 mod util;
+mod acpi;
 mod allocator;
 mod gdt;
 mod interrupts;
 mod mem;
 mod processes;
-mod acpi;
 
 use core::panic::PanicInfo;
 
 // use alloc::boxed::Box;
 use x86_64::registers::control::{Cr3, Cr3Flags};
 use x86_64::structures::paging::mapper::TranslateResult;
-use x86_64::structures::paging::{OffsetPageTable, PageTable, PhysFrame, Translate};
+use x86_64::structures::paging::{
+    Mapper, OffsetPageTable, PageTable, PageTableFlags, PhysFrame, Size4KiB, Translate,
+};
 use x86_64::{PhysAddr, VirtAddr};
 
 use crate::processes::{test_process, Process};
@@ -43,7 +47,6 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
     let base = efi::get_image_base(image_handle);
     kprintln!("Entry: {:x}", base);
 
-    
     let wait = false;
     while wait {
         unsafe { asm!("pause") }
@@ -77,6 +80,15 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
 
     allocator::init_heap(&mut mapper, &mut frame_allocator, false).expect("Unable to create heap!");
 
+    unsafe {
+        mapper.identity_map(
+            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(0xFEE00000)),
+            PageTableFlags::WRITABLE,
+            &mut frame_allocator,
+        );
+    }
+ 
+    // let i = 5 / 0;
     // let addresses = [processes::test_process as u64]; // same as before
 
     // for &address in &addresses {
@@ -89,14 +101,15 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
     //         _ => (),
     //     }
     // }
+    // interrupts::enable_apic();
 
-    processes::set_syscall_sp();
+    // processes::set_syscall_sp();
 
-    let new_process = Process::new(test_process, &mut frame_allocator);
+    // let new_process = Process::new(test_process, &mut frame_allocator);
 
-    unsafe {
-        processes::jump_usermode(&mapper, &new_process);
-    }
+    // unsafe {
+    //     processes::jump_usermode(&mapper, &new_process);
+    // }
 
     kprintln!("Done!");
 

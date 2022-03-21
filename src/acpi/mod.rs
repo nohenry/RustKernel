@@ -1,11 +1,15 @@
+
 mod types;
+pub mod xsdt;
+pub mod madt;
+
 use core::sync::atomic::AtomicPtr;
+use xsdt::XSDT;
+use crate::efi::{GLOBAL_SYSTEM_TABLE, guid};
 
 pub use types::*;
 
-use crate::efi::{GLOBAL_SYSTEM_TABLE, guid};
-
-const RSDP: AtomicPtr<RSDP> = AtomicPtr::new(core::ptr::null_mut());
+pub const RSDP: AtomicPtr<RSDP> = AtomicPtr::new(core::ptr::null_mut());
 
 pub fn init() {
     let efi_table = unsafe {&*GLOBAL_SYSTEM_TABLE.load(core::sync::atomic::Ordering::SeqCst)};
@@ -26,8 +30,12 @@ pub fn init() {
     let xsdt = unsafe { &*rsdp.xsdt };
 
     for table in xsdt.iter() {
-    //     table.signature();
-    //     // kprintln!("{}", table.signature);
+        if table.signature == Signature::MADT.as_bytes() {
+            let madt = table.get_entry::<madt::MADT>();
+            for entry in madt.iter() {
+                kprintln!("{:?}", entry);
+            }
+        }
     }
 }
 

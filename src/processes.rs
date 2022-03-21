@@ -1,6 +1,10 @@
 use core::marker::PhantomData;
 
-use crate::{interrupts::{IDT, CpuSnapshot}, mem, interrupt_begin, interrupt_end};
+use crate::{
+    interrupt_begin, interrupt_end,
+    interrupts::{CpuSnapshot, IDT},
+    mem,
+};
 use alloc::{boxed::Box, string::String};
 // use x86_64::structures::paging::PageTable;
 use x86_64::{
@@ -80,11 +84,11 @@ impl Process {
         let kernel_code_frames =
             PhysFrame::<Size4KiB>::range_inclusive(kernel_code_start, kernel_code_end);
 
-        let kernel_stack_start =
-            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(unsafe { SYSCALL_SP } - 4 * 4096));
-        let kernel_stack_end = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(
-            unsafe { SYSCALL_SP },
+        let kernel_stack_start = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(
+            unsafe { SYSCALL_SP } - 4 * 4096,
         ));
+        let kernel_stack_end =
+            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(unsafe { SYSCALL_SP }));
         let kernel_stack_frames =
             PhysFrame::<Size4KiB>::range_inclusive(kernel_stack_start, kernel_stack_end);
 
@@ -94,7 +98,9 @@ impl Process {
                     .identity_map(
                         frame,
                         // For now the test process is in kernel code so user accessable flag is set
-                        PageTableFlags::USER_ACCESSIBLE | PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                        PageTableFlags::USER_ACCESSIBLE
+                            | PageTableFlags::PRESENT
+                            | PageTableFlags::WRITABLE,
                         frame_allocator,
                     )
                     .expect("Unable to identity map!")
@@ -238,7 +244,7 @@ unsafe fn syscall_entry_stub() {
 }
 
 fn syscall_entry(cpu: &CpuSnapshot) {
-    kprint!(".")
+    // kprint!(".")
     // let syscall_type = cpu.rdi;
     // let syscall_type = SyscallType::from(syscall_type);
 
@@ -300,6 +306,7 @@ pub unsafe fn jump_usermode(mapper: &OffsetPageTable, process: &Process) -> ! {
     mov rsp, r12
     mov rbp, r12
 	mov r11, 0x202 
-	sysretq ", options(noreturn)
+	sysretq ",
+        options(noreturn)
     );
 }

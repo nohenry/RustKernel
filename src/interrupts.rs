@@ -1,11 +1,21 @@
+use core::borrow::Borrow;
+
 use crate::{
+    acpi::{
+        get_xsdt,
+        madt::{self, Entry},
+        Signature, RSDP,
+    },
+    drivers::keyboard::Keyboard,
     gdt,
-    util::{self, out8, in8}, drivers::keyboard::Keyboard,
-    processes::{SYSCALL_SP, SYSCALL_UMAP, SYSCALL_USP}
+    processes::{SYSCALL_SP, SYSCALL_UMAP, SYSCALL_USP},
+    util::{self, in8, out8},
 };
 use lazy_static::lazy_static;
-use x86_64::structures::idt::{self, InterruptDescriptorTable};
-
+use x86_64::{
+    registers::model_specific::{Msr, IA32_APIC_BASE},
+    structures::idt::{self, InterruptDescriptorTable},
+};
 
 use crate::drivers::pic::ChainedPics;
 use spin;
@@ -13,8 +23,7 @@ use spin;
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 
-pub static PICS: spin::Mutex<ChainedPics> =
-    spin::Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
+pub static APIC: spin::Mutex<LocalApic> = spin::Mutex::new(LocalApic::new());
 
 #[repr(C)]
 pub struct CpuSnapshot {
@@ -187,7 +196,9 @@ lazy_static! {
             idt.double_fault
                 .set_handler_fn(double_fault_handler)
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
-            idt.page_fault.set_handler_fn(pagefault_handler).set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
+            idt.page_fault
+                .set_handler_fn(pagefault_handler)
+                .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
         }
 
         unsafe {
@@ -200,25 +211,26 @@ lazy_static! {
         }
         idt[InterruptIndex::SerialPort2.as_usize()].set_handler_fn(serial1_handler);
         idt[InterruptIndex::SerialPort1.as_usize()].set_handler_fn(serial1_handler);
+
+        idt[60].set_handler_fn(lapic_timer);
+        idt[0xFF].set_handler_fn(lapic_spurious);
         idt
     };
 }
 
 pub fn init() {
     x86_64::instructions::interrupts::disable();
+
     IDT.load();
 
-    unsafe {
-        PICS.lock().initialize();
-    };
+    APIC.lock().init();
 
-    // The above initialize method doesn't do this and doesn't work without it :(
     unsafe {
-        out8(0x21, 0x00);
-        out8(0xA1, 0x00);
+        out8(0x21, 0xFF);
+        out8(0xA1, 0xFF);
     }
-    // unsafe { PICS.lock().write_masks(0xfe, 0xff) }
 
+    x86_64::instructions::interrupts::enable();
 }
 
 extern "x86-interrupt" fn timer_handler_stub(stack_frame: idt::InterruptStackFrame) {
@@ -228,7 +240,7 @@ extern "x86-interrupt" fn timer_handler_stub(stack_frame: idt::InterruptStackFra
         asm!("mov rdx, rsp", options(nomem, nostack)); // Save old stack
         asm!("mov rsp, rax; mov rbp, rsp", in("rax") SYSCALL_SP, options(nostack)); // Load kernel stack
         asm!("", out("rdx") SYSCALL_USP, options(nostack)); // Save old stack into variable for later
-        // asm!("", out("rdx") cpu, options(nostack)); // Load address into pointer for cpu snapshot
+                                                            // asm!("", out("rdx") cpu, options(nostack)); // Load address into pointer for cpu snapshot
 
         asm!("mov rax, cr3", out("rax") SYSCALL_UMAP, options(nostack)); // Save old address space
 
@@ -237,16 +249,14 @@ extern "x86-interrupt" fn timer_handler_stub(stack_frame: idt::InterruptStackFra
         asm!("mov cr3, rax", in("rax") SYSCALL_UMAP, options(nostack));
         asm!("mov rsp, rax", in("rax") SYSCALL_USP, options(nostack));
 
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
+        // PICS.lock()
+        //     .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
         // PICS.force_unlock();
     }
     interrupt_end!(sti);
 }
 
-fn timer_handler() {
-
-}
+fn timer_handler() {}
 
 extern "x86-interrupt" fn serial1_handler(_stack_frame: idt::InterruptStackFrame) {
     kprintln!("Serial\n");
@@ -254,14 +264,14 @@ extern "x86-interrupt" fn serial1_handler(_stack_frame: idt::InterruptStackFrame
         util::in8(0x3F8);
     }
     unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::SerialPort2.as_u8());
+        // PICS.lock()
+        //     .notify_end_of_interrupt(InterruptIndex::SerialPort2.as_u8());
     }
 }
 
 extern "x86-interrupt" fn keyboard_handler(_stack_frame: idt::InterruptStackFrame) {
     interrupt_begin!();
-     unsafe {
+    unsafe {
         asm!("mov rdx, rsp", options(nostack));
         asm!("mov rsp, {}", in(reg) crate::processes::SYSCALL_SP, options(nostack));
 
@@ -279,8 +289,8 @@ extern "x86-interrupt" fn keyboard_handler(_stack_frame: idt::InterruptStackFram
         asm!("mov cr3, rsi", options(nostack));
         asm!("mov rsp, {}", in(reg) crate::processes::SYSCALL_USP, options(nostack));
 
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
+        // PICS.lock()
+        //     .notify_end_of_interrupt(InterruptIndex::Timer.as_u9());
     }
     interrupt_end!();
 }
@@ -304,6 +314,7 @@ extern "x86-interrupt" fn general_protection_handler(
     _e: u64,
 ) {
     kprintln!("EXCPETION: GP\n{:#?}\n{}\n", stack_frame, _e);
+    loop {}
 }
 
 extern "x86-interrupt" fn double_fault_handler(
@@ -328,4 +339,100 @@ extern "x86-interrupt" fn pagefault_handler(
     kprintln!("Address: {:?}\n", Cr2::read());
 
     loop {}
+}
+
+extern "x86-interrupt" fn lapic_timer(_stack_frame: idt::InterruptStackFrame) {
+    kprint!(".");
+    APIC.lock().send_eoi();
+}
+
+extern "x86-interrupt" fn lapic_spurious(_stack_frame: idt::InterruptStackFrame) {
+    kprintln!("LAPIC Spurious");
+    APIC.lock().send_eoi();
+}
+
+pub struct LocalApic {
+    msr: Msr,
+    base: u64,
+}
+
+impl LocalApic {
+    pub const fn new() -> LocalApic {
+        let msr = Msr::new(IA32_APIC_BASE);
+
+        LocalApic {
+            msr,
+            base: 0xFEE00000,
+        }
+    }
+
+    pub fn init(&mut self) {
+        let value = unsafe { self.msr.read() };
+        self.base = value & 0xFFFFFF000;
+
+        self.write(LocalApic::SIV, self.read(LocalApic::SIV) | 0x1FF);
+
+        self.write(LocalApic::LVT_TIMER, 60 | LocalApic::TIMER_PERIODIC);
+        self.write(LocalApic::DCR_TIMER, 3);
+
+        self.write(LocalApic::INITCNT_TIMER, 1000000);
+    }
+
+    const ID: u16 = 0x20;
+    const VERSION: u16 = 0x30;
+    const TPR: u16 = 0x80;
+    const APR: u16 = 0x90;
+    const PPR: u16 = 0xA0;
+    const EOI: u16 = 0xB0;
+    const RRD: u16 = 0xC0;
+    const LDR: u16 = 0xD0;
+    const DFR: u16 = 0xE0;
+    const SIV: u16 = 0xF0;
+
+    const ERROR_STATUS: u16 = 0x280;
+
+    const LVT_TIMER: u16 = 0x320;
+    const LVT_THERMAL: u16 = 0x330;
+    const LVT_PMC: u16 = 0x340;
+    const LVT_LINT0: u16 = 0x350;
+    const LVT_LINT1: u16 = 0x360;
+    const LVT_ERROR: u16 = 0x370;
+    const INITCNT_TIMER: u16 = 0x380;
+    const CURCNT_TIMER: u16 = 0x390;
+    const DCR_TIMER: u16 = 0x3E0;
+
+    const TIMER_PERIODIC: u32 = 0x20000;
+
+    fn write(&mut self, offset: u16, value: u32) {
+        unsafe {
+            core::ptr::write_volatile((self.base + offset as u64) as *mut _, value);
+        }
+    }
+
+    fn read(&self, offset: u16) -> u32 {
+        unsafe { core::ptr::read_volatile((self.base + offset as u64) as *mut _) }
+    }
+
+    pub fn send_eoi(&mut self) {
+        self.write(LocalApic::EOI, 0);
+    }
+}
+
+pub fn enable_apic() {
+    // let xsdt = get_xsdt();
+    // let madt = xsdt
+    //     .iter()
+    //     .find(|table| table.signature == Signature::MADT.as_bytes())
+    //     .expect("Unable to get MADT!");
+    // let lapic = madt
+    //     .get_entry::<madt::MADT>()
+    //     .iter()
+    //     .find(|e| {
+    //         if let Entry::LocalApic { .. } = e {
+    //             true
+    //         } else {
+    //             false
+    //         }
+    //     })
+    //     .expect("Unable to find Local Apic in madt!");
 }
