@@ -15,14 +15,16 @@ pub struct RSDP {
 
 pub enum Signature {
     MADT,
+    FADT,
+    MCFG,
 }
 
 impl Signature {
     crate fn as_bytes(&self) -> &[u8] {
         match self {
             Signature::MADT => "APIC".as_bytes(),
+            Signature::FADT => "FACP".as_bytes(),
+            Signature::MCFG => "MCFG".as_bytes(),
         }
     }
 }
-
-

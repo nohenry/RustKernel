@@ -1,4 +1,5 @@
 use core::borrow::Borrow;
+use bit_field::BitField;
 
 use crate::{
     acpi::{
@@ -24,6 +25,7 @@ pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 
 pub static APIC: spin::Mutex<LocalApic> = spin::Mutex::new(LocalApic::new());
+pub static IOAPIC: spin::Mutex<IOApic> = spin::Mutex::new(IOApic::new());
 
 #[repr(C)]
 pub struct CpuSnapshot {
@@ -224,6 +226,7 @@ pub fn init() {
     IDT.load();
 
     APIC.lock().init();
+    IOAPIC.lock().init();
 
     unsafe {
         out8(0x21, 0xFF);
@@ -342,7 +345,7 @@ extern "x86-interrupt" fn pagefault_handler(
 }
 
 extern "x86-interrupt" fn lapic_timer(_stack_frame: idt::InterruptStackFrame) {
-    kprint!(".");
+    // kprint!(".");
     APIC.lock().send_eoi();
 }
 
@@ -418,21 +421,144 @@ impl LocalApic {
     }
 }
 
-pub fn enable_apic() {
-    // let xsdt = get_xsdt();
-    // let madt = xsdt
-    //     .iter()
-    //     .find(|table| table.signature == Signature::MADT.as_bytes())
-    //     .expect("Unable to get MADT!");
-    // let lapic = madt
-    //     .get_entry::<madt::MADT>()
-    //     .iter()
-    //     .find(|e| {
-    //         if let Entry::LocalApic { .. } = e {
-    //             true
-    //         } else {
-    //             false
-    //         }
-    //     })
-    //     .expect("Unable to find Local Apic in madt!");
+pub struct RedirectionEntry {
+    low: u32,
+    high: u32,
+}
+
+impl RedirectionEntry {
+    pub fn new() -> RedirectionEntry {
+        RedirectionEntry { low: 0, high: 0 }
+    }
+
+    #[inline]
+    pub fn set_vector(&mut self, vector: u8) {
+        self.low.set_bits(0..=7, vector as _);
+    }
+
+    #[inline]
+    pub fn set_delivery_mode(&mut self, mode: u8) {
+        self.low.set_bits(8..=10, mode as _);
+    }
+
+    #[inline]
+    pub fn set_destination_mode(&mut self, mode: u8) {
+        self.low.set_bit(11, mode == 1);
+    }
+
+    #[inline]
+    pub fn set_delivery_status(&mut self, status: u8) {
+        self.low.set_bit(12, status == 1);
+    }
+
+    #[inline]
+    pub fn set_polarity(&mut self, polarity: u8) {
+        self.low.set_bit(13, polarity == 1);
+    }
+
+    #[inline]
+    pub fn set_IRR(&mut self, irr: u8) {
+        self.low.set_bit(14, irr == 1);
+    }
+
+    #[inline]
+    pub fn set_trigger_mode(&mut self, mode: u8) {
+        self.low.set_bit(15, mode == 1);
+    }
+
+    #[inline]
+    pub fn set_mask(&mut self, mask: u8) {
+        self.low.set_bit(16, mask == 1);
+    }
+
+    #[inline]
+    pub fn set_destination(&mut self, dest: u8) {
+        self.high.set_bits(24..=31, dest as _);
+    }
+
+    #[inline]
+    pub fn enable(&mut self) {
+        self.set_mask(1);
+    }
+
+    #[inline]
+    pub fn disable(&mut self) {
+        self.set_mask(0);
+    }
+
+    #[inline]
+    pub fn get_low(&self) -> u32 {
+        self.low
+    }
+
+    #[inline]
+    pub fn get_high(&self) -> u32 {
+        self.high
+    }
+}
+
+pub struct IOApic {
+    base: u64,
+}
+
+impl IOApic {
+    const ID: u16 = 0;
+    const VERSION: u16 = 1;
+    const ARB: u16 = 2;
+    const RED_TABLE: u16 = 0x10;
+
+    pub const fn new() -> IOApic {
+        IOApic { base: 0 }
+    }
+
+    pub fn init(&mut self) {
+        let xsdt = get_xsdt();
+        let madt = xsdt
+            .iter()
+            .find(|table| table.signature == Signature::MADT.as_bytes())
+            .expect("Unable to get MADT!");
+
+        let ioapic = madt
+            .get_entry::<madt::MADT>()
+            .iter()
+            .find(|e| {
+                if let Entry::IoApic { .. } = e {
+                    true
+                } else {
+                    false
+                }
+            })
+            .expect("Unable to find Local Apic in madt!");
+
+        match ioapic {
+            Entry::IoApic {
+                io_apic_address, ..
+            } => self.base = *io_apic_address as u64,
+            _ => (),
+        }
+
+        let mut re = RedirectionEntry::new();
+        re.set_vector(0x45);
+        self.write_entry(1, &re);
+    }
+
+    pub fn write(&mut self, offset: u16, value: u32) {
+        unsafe {
+            core::ptr::write_volatile(self.base as *mut u32, offset as _); // IOREGSEL
+            core::ptr::write_volatile((self.base + 0x10) as *mut u32, value); // IOWIN
+        }
+    }
+
+    pub fn read(&self, offset: u16) -> u32 {
+        unsafe {
+            core::ptr::write_volatile(self.base as *mut u32, offset as _); // IOREGSEL
+            core::ptr::read_volatile((self.base + 10) as *mut u32) // IOWIN
+        }
+    }
+
+    pub fn write_entry(&mut self, vector: u8, entry: &RedirectionEntry) {
+        let address = IOApic::RED_TABLE + (2 * vector as u16);
+        self.write(address, entry.get_low());
+        self.write(address + 1, entry.get_high());
+    }
 }

@@ -300,8 +300,8 @@ pub fn get_memory_map(image_handle: Handle) -> MemoryMap {
                 desc.size * 4096,
                 desc.memory_type
             );
-            // kprintln!("{:x?}", desc);
         }
+        kprintln!("all: {:x?}, conv: {:x}", all, conventional);
 
         let result = ((*(*table).boot_services).exit_boot_services)(image_handle, key);
         assert!(result == 0, "Unable to exit boot services! {:x}", result);

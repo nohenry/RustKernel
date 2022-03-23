@@ -81,6 +81,26 @@ pub unsafe fn memset(ptr: *mut u8, value: i32, n: usize) -> *mut u8 {
     ptr
 }
 
+#[no_mangle]
+pub fn fmaxf(x: f32, y: f32) -> f32 {
+    (if x.is_nan() || x < y { y } else { x }) * 1.0
+}
+
+#[no_mangle]
+pub fn fminf(x: f32, y: f32) -> f32 {
+    (if x.is_nan() || x < y { x } else { y }) * 1.0
+}
+
+#[no_mangle]
+pub fn fmax(x: f64, y: f64) -> f64 {
+    (if x.is_nan() || x < y { y } else { x }) * 1.0
+}
+
+#[no_mangle]
+pub fn fmin(x: f64, y: f64) -> f64 {
+    (if x.is_nan() || x < y { x } else { y }) * 1.0
+}
+
 #[inline(always)]
 pub unsafe fn out8(port: u16, value: u8) {
     asm!("out dx, al", in("dx") port, in("al") value);
@@ -116,6 +136,7 @@ pub unsafe fn in32(port: u16) -> u32 {
     asm!("in eax, dx", in("dx") port, out("eax") ret);
     ret
 }
+
 
 #[macro_export]
 macro_rules! kprint {

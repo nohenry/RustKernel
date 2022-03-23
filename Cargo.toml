@@ -11,6 +11,8 @@ x86_64 = {path = "../../Libraries/x86_64", features=["const_fn", "instructions"]
 spin = {version="0.9.2", default-features=false, features=["mutex", "spin_mutex"]}
 linked_list_allocator = {path = "../../Libraries/linked-list-allocator"}
 macros = {path="./src/macros"}
+bit_field= "*"
+aml = {path="acpi/aml"}
 
 # [patch.crates-io]
 # x86_64 = { path = "../../Libraries/x86_64" }
@@ -18,6 +20,11 @@ macros = {path="./src/macros"}
 [dependencies.lazy_static]
 version = "1.4.0"
 features = ["spin_no_std"]
+
+[dependencies.spinning_top]
+# version = "0.2.3"
+path = "../../Libraries/spinning_top"
+# optional = true
 
 [profile.dev]
 panic = "abort"

@@ -9,7 +9,7 @@
 #![feature(crate_visibility_modifier)]
 #![feature(arbitrary_enum_discriminant)]
 #![allow(unconditional_panic)]
-#![allow(unused)]
+// #![allow(unused)]
 
 extern crate alloc;
 
@@ -23,9 +23,11 @@ mod gdt;
 mod interrupts;
 mod mem;
 mod processes;
+mod linked_list_allocator;
 
 use core::panic::PanicInfo;
 
+use aml::{AmlContext, DebugVerbosity};
 // use alloc::boxed::Box;
 use x86_64::registers::control::{Cr3, Cr3Flags};
 use x86_64::structures::paging::mapper::TranslateResult;
@@ -34,6 +36,7 @@ use x86_64::structures::paging::{
 };
 use x86_64::{PhysAddr, VirtAddr};
 
+use crate::drivers::pci;
 use crate::processes::{test_process, Process};
 // use crate::util::CpuState;
 
@@ -87,6 +90,9 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
             &mut frame_allocator,
         );
     }
+
+    pci::init();
+    acpi::aml::init();
  
     // let i = 5 / 0;
     // let addresses = [processes::test_process as u64]; // same as before
