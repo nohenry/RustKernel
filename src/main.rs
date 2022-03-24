@@ -93,6 +93,7 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
 
     pci::init();
     acpi::aml::init();
+    pci::gather_devices();
  
     // let i = 5 / 0;
     // let addresses = [processes::test_process as u64]; // same as before

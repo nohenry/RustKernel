@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
 use aml::{
-    name_object::NameSeg, resource::resource_descriptor_list, AmlContext, DebugVerbosity, Handler,
+    name_object::NameSeg, pci_routing::PciRoutingTable, resource::resource_descriptor_list,
+    value::Args, AmlContext, AmlName, AmlValue, DebugVerbosity, Handler, LevelType,
 };
 
 use crate::{
@@ -118,6 +119,8 @@ impl Handler for AmlHandler {
     }
 }
 
+pub static mut GLOBAL_AML: Option<AmlContext> = None;
+
 pub fn init() {
     let xsdt = get_xsdt();
     let fadt = xsdt
@@ -134,70 +137,59 @@ pub fn init() {
     };
     kprintln!("{}", b.len());
 
-    let dump = unsafe {
-        core::slice::from_raw_parts(
-            &dsdt.header as *const _ as *const u8,
-            dsdt.header.length as _,
-        )
-    };
-    for b in dump {
-        kprint!("{:02x}", b);
-    }
-loop {}
-
     let mut aml_context = AmlContext::new(Box::new(AmlHandler), DebugVerbosity::All);
     aml_context.parse_table(b).unwrap();
     aml_context.initialize_objects().unwrap();
     // let mut level = None;
-    // aml_context
-    //     .namespace
-    //     .traverse(|name, nlevel| {
-    //         if name.as_string() == "\\_SB_.PCI0" {
-    //             level = Some(nlevel.clone());
-    //         }
-    //         Ok(true)
-    //     })
-    //     .unwrap();
+    aml_context
+        .invoke_method(
+            &AmlName::from_str("\\_PIC").unwrap(),
+            Args([
+                Some(AmlValue::Integer(1)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]),
+        )
+        .unwrap();
+
+    let namespace = &aml_context.namespace;
+    let namespace = namespace.clone();
+    aml_context
+        .namespace
+        .traverse(|name, nlevel| {
+            if let LevelType::Device = nlevel.typ {
+                kprintln!("Device: {}", name);
+                // kprintln!("  {:?}", nlevel);
+
+                let hid = nlevel.values.get(&NameSeg::from_str("_HID").unwrap());
+                let crs = nlevel.values.get(&NameSeg::from_str("_CRS").unwrap());
+                if let Some(hid) = hid {
+                    let hid = namespace.get(*hid).unwrap();
+                    kprintln!("  HID: {:x?}", hid);
+                }
+                if let Some(crs) = crs {
+                    let crs = namespace.get(*crs).unwrap();
+                    let crs_resources = resource_descriptor_list(crs);
+                    if let Ok(ref crs_resources) = crs_resources {
+                        for res in crs_resources.iter() {
+                            kprintln!(" CRS: {:x?}", res)
+                        }
+                    }
+                }
+            }
+            Ok(true)
+        })
+        .unwrap();
 
     kprintln!("{:#x?}", aml_context.namespace);
 
-    // kprintln!("\n\n\nLevel{:#?}", level);
-    let rt = &aml_context.namespace;
-    let mut rt = rt.clone();
-    rt.traverse(|n, l| {
-        kprintln!("name: {}", n);
 
-        if let Some(handle) = l.values.get(&NameSeg::from_str("_HID").unwrap()) {
-            let res = aml_context.namespace.get(*handle).unwrap();
-            kprintln!("  HID {:x?}", res);
-        }
-        if let Some(handle) = l.values.get(&NameSeg::from_str("_UID").unwrap()) {
-            let res = aml_context.namespace.get(*handle).unwrap();
-            kprintln!("  UID {:x?}", res);
-        }
-        if let Some(handle) = l.values.get(&NameSeg::from_str("_CRS").unwrap()) {
-            let res = aml_context.namespace.get(*handle);
-            match res {
-                Ok(val) => {
-                    let resources = resource_descriptor_list(val);
-                    match resources {
-                        Ok(resources) => {
-                            for res in resources {
-                                kprintln!("  Handle: {:x?}", res);
-                            }
-                        }
-                        _ => (),
-                    }
-                }
-                Err(_e) => {
-                    kprintln!("Unable to find handle!");
-                }
-            }
-        }
-        Ok(true)
-    })
-    .unwrap();
-    // for (cname, clevel) in &level.unwrap().children {
-    // }
-    // aml_context.namespace.get_handle()
+    unsafe {
+        GLOBAL_AML = Some(aml_context);
+    }
+
 }
