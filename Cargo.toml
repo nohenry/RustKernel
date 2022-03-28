@@ -1,30 +1,11 @@
-[package]
-name = "RustKernel"
-version = "0.1.0"
-edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-# x86_64 = {version="=0.14.2", features=["const_fn"]}
-x86_64 = {path = "../../Libraries/x86_64", features=["const_fn", "instructions"]}
-spin = {version="0.9.2", default-features=false, features=["mutex", "spin_mutex"]}
-linked_list_allocator = {path = "../../Libraries/linked-list-allocator"}
-macros = {path="./src/macros"}
-bit_field= "*"
-aml = {path="acpi/aml"}
-
-# [patch.crates-io]
-# x86_64 = { path = "../../Libraries/x86_64" }
-
-[dependencies.lazy_static]
-version = "1.4.0"
-features = ["spin_no_std"]
-
-[dependencies.spinning_top]
-# version = "0.2.3"
-path = "../../Libraries/spinning_top"
-# optional = true
+[workspace]
+members = [
+    "kernel",
+    "kernel_api/*",
+    "boot_image_generator",
+    "disk_image_generator",
+    "drivers/*"
+]
 
 [profile.dev]
 panic = "abort"
