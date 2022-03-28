@@ -1,0 +1,18 @@
+[package]
+name = "disk_image_generator"
+version = "0.1.0"
+authors = ["Oliver Clarke <oliverhenryc@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tempfile = "3.3.0"
+fs_extra = "1.2.0"
+byteorder = "1"
+chrono = "0.4"
+structopt = "0.2"
+fatfs = "0.3.5"
+fscommon = "*"
+log = "0.4.16"
+env_logger = "0.9.0"

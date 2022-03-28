@@ -1,3 +1,9 @@
-/target
+/**/target
 /misc
+/acpi
 qemu.log
+acpi
+misc/qemu_image
+misc/kernel.img
+misc/kernel.iso
+misc/qemu.log
