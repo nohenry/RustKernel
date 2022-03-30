@@ -17,6 +17,7 @@ linked_list_allocator = {path = "../../../Libraries/linked-list-allocator"}
 macros = {path="./src/macros"}
 bit_field= "*"
 aml = {path="../../../acpi/aml"}
+boot_image_generator = { path = "../boot_image_generator" }
 
 # [patch.crates-io]
 # x86_64 = { path = "../../Libraries/x86_64" }

@@ -91,20 +91,22 @@ pub fn wchar(tokens: TokenStream) -> TokenStream {
     match chr {
         Some(s) => match s {
             TokenTree::Literal(l) => {
-                let str = l.to_string();
+                let rstr = l.to_string();
 
-                let mut chars = str.chars();
+                let mut chars = rstr.chars();
                 chars.next();
                 chars.next_back();
-                let str = chars.as_str();
+                let rstr = chars.as_str();
 
+                let estr = unescape::unescape(rstr).unwrap();
+                
                 let mut dstr = String::from("&[");
-                for s in str.chars() {
+                for s in estr.chars() {
                     let mut b = [0; 2];
-                    s.encode_utf16(&mut b);
-                    dstr.push_str(&format!("0x{:x}u16, 0x{:x}u16, ", b[0], b[1]));
+                    s.encode_utf8(&mut b);
+                    dstr.push_str(&format!("0x{:x}{:x}, ", b[1], b[0]));
                 }
-                dstr.push(']');
+                dstr.push_str("0x00u16]");
 
                 return TokenStream::from_str(&dstr).unwrap();
             }

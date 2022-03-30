@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "kernel",
+	"kernel_loader",
     "kernel_api/*",
     "boot_image_generator",
     "disk_image_generator",

@@ -12,9 +12,9 @@ use iso::option::{ElToritoOpt, Opt};
 mod iso;
 
 const IN_FILES: &[&str] =
-    &["D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-uefi\\debug\\kernel.efi"];
+    &["D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-uefi\\debug\\kernel.efi", "D:\\Developement\\Projects\\RustKernel\\boot_image_generator\\boot_image.bin"];
 
-const OUT_FILES: &[&str] = &["efi/boot/bootx64.efi"];
+const OUT_FILES: &[&str] = &["efi/boot/bootx64.efi", "efi/boot/btimg.bin"];
 
 fn main() -> io::Result<()> {
     env_logger::init();

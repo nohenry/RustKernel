@@ -2,6 +2,26 @@
 
 use core::arch::asm;
 
+#[macro_export]
+macro_rules! kprint {
+    ($($arg:tt)*) => ({
+        use core::fmt;
+        let mut serial = $crate::drivers::serial::SerialPort::from(0x3F8);
+        fmt::write(&mut serial, format_args!($($arg)*)).expect("Unable to print!");
+    })
+}
+
+#[macro_export]
+macro_rules! kprintln {
+    () => ($crate::kprint!("\r\n"));
+    ($($arg:tt)*) => ({
+        use core::fmt;
+        let mut serial = $crate::drivers::serial::SerialPort::from(0x3F8);
+        fmt::write(&mut serial, format_args!($($arg)*)).expect("Unable to print!");
+        fmt::write(&mut serial, format_args!("\r\n")).expect("Unable to print!");
+    })
+}
+
 #[no_mangle]
 #[inline(always)]
 pub unsafe fn memcpy(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
@@ -139,25 +159,6 @@ pub unsafe fn in32(port: u16) -> u32 {
     ret
 }
 
-#[macro_export]
-macro_rules! kprint {
-    ($($arg:tt)*) => ({
-        use core::fmt;
-        let mut serial = $crate::drivers::serial::SerialPort::from(0x3F8);
-        fmt::write(&mut serial, format_args!($($arg)*)).expect("Unable to print!");
-    })
-}
-
-#[macro_export]
-macro_rules! kprintln {
-    () => ($crate::kprint!("\r\n"));
-    ($($arg:tt)*) => ({
-        use core::fmt;
-        let mut serial = $crate::drivers::serial::SerialPort::from(0x3F8);
-        fmt::write(&mut serial, format_args!($($arg)*)).expect("Unable to print!");
-        fmt::write(&mut serial, format_args!("\r\n")).expect("Unable to print!");
-    })
-}
 
 #[derive(Debug, Default)]
 pub struct CpuState {

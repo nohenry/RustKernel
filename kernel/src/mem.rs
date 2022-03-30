@@ -1,5 +1,5 @@
 use x86_64::{
-    structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB},
+    structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB, mapper::{MapperFlush, MapToError}, PageTableFlags, Mapper},
     PhysAddr, VirtAddr,
 };
 
@@ -26,6 +26,13 @@ pub unsafe fn init() -> OffsetPageTable<'static> {
     OffsetPageTable::new(level_4_table, VirtAddr::new(0))
 }
 
+pub fn map_phys<A>(pgtbl: &mut OffsetPageTable<'_>, phys: PhysAddr, size: usize, frame_allocator: &mut A) -> Result<MapperFlush<Size4KiB>, MapToError<Size4KiB>>
+where
+    A: FrameAllocator<Size4KiB> + ?Sized,
+{
+    unsafe { pgtbl.identity_map(PhysFrame::<Size4KiB>::containing_address(phys), PageTableFlags::WRITABLE, frame_allocator) } 
+}
+
 pub struct PageTableFrameAllocator {
     memory_map: efi::MemoryMap,
     next: usize,
@@ -39,7 +46,7 @@ impl PageTableFrameAllocator {
         }
     }
 
-    fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {
+    pub fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {
         let iter = self.memory_map.iter();
         let usable = iter.filter(|d| d.memory_type.is_usable());
 
@@ -47,6 +54,19 @@ impl PageTableFrameAllocator {
             usable.map(|u| u.physical_address..(u.physical_address + u.size * 4096));
         let addresses = address_range.flat_map(|r| r.step_by(4096));
         addresses.map(|addr| PhysFrame::containing_address(PhysAddr::new(addr as u64)))
+    }
+
+    pub fn allocate_size(&mut self, size: usize) -> Option<(PhysFrame<Size4KiB>, usize)>{
+        let n = size / 4096;
+        let mut ret_frame = PhysFrame::containing_address(PhysAddr::new(0));
+        for i in 0..n {
+            if let Some(f) = self.allocate_frame() {
+                if i == 0 { ret_frame = f }
+            } else {
+                return None;
+            }
+        }
+        Some((ret_frame, n)) 
     }
 }
 

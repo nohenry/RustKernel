@@ -214,8 +214,11 @@ lazy_static! {
         idt[InterruptIndex::SerialPort2.as_usize()].set_handler_fn(serial1_handler);
         idt[InterruptIndex::SerialPort1.as_usize()].set_handler_fn(serial1_handler);
 
-        idt[60].set_handler_fn(lapic_timer);
-        idt[0xFF].set_handler_fn(lapic_spurious);
+        /* APIC Stuff */
+        unsafe {
+            idt[60].set_handler_fn(lapic_timer).set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
+            idt[0xFF].set_handler_fn(lapic_spurious);
+        }
         idt
     };
 }
@@ -233,7 +236,7 @@ pub fn init() {
         out8(0xA1, 0xFF);
     }
 
-    x86_64::instructions::interrupts::enable();
+    //x86_64::instructions::interrupts::enable();
 }
 
 extern "x86-interrupt" fn timer_handler_stub(stack_frame: idt::InterruptStackFrame) {

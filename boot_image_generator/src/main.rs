@@ -7,23 +7,17 @@ use std::{
     vec,
 };
 
+use boot_fs::FileHeader;
+
 const DRIVERS: &'static [&str] = &["libfile_system.a", "libpci.a"];
 const DRIVER_PATH: &str =
     "D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-linux-musl\\debug";
 
-const CDRIVERS: &'static [&str] = &["lib.a"];
+const CDRIVERS: &'static [&str] = &["driver"];
 const CDRIVER_PATH: &str = "D:\\Developement\\Projects\\RustKernel\\drivers-c\\c_driver";
 
 const MAX_FILES: usize = 64;
 const HEADER_MAGIC: u16 = 0x6945;
-
-#[repr(C, packed)]
-struct FileHeader {
-    magic: u16,
-    name: [u8; 16],
-    file_offset: u32,
-    file_length: u32,
-}
 
 fn main() {
     let files: Vec<PathBuf> = CDRIVERS
