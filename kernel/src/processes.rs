@@ -3,23 +3,22 @@ use core::{arch::asm, marker::PhantomData, sync::atomic::AtomicU32};
 use crate::{
     interrupt_begin, interrupt_end,
     interrupts::{CpuSnapshot, IDT},
-    mem, elf::{ElfFile, self, SegmentType},
+    mem,
 };
 use alloc::{boxed::Box, string::String};
-// use x86_64::structures::paging::PageTable;
-use x86_64::{
+use common::{elf::{self, ElfFile, SegmentType}, kprintln, efi, allocator, util};
+
+use common::x86_64::{
     registers::control::{Cr3, Cr3Flags},
     structures::{
         idt::InterruptDescriptorTable,
         paging::{
-            FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame,
-            Size4KiB, Translate, mapper::TranslateResult,
+            mapper::TranslateResult, FrameAllocator, Mapper, OffsetPageTable, Page, PageTable,
+            PageTableFlags, PhysFrame, Size4KiB, Translate,
         },
     },
     PhysAddr, VirtAddr,
 };
-
-use crate::{efi, util};
 
 type ProcessId = u32;
 
@@ -36,9 +35,7 @@ static IDINDEX: AtomicU32 = AtomicU32::new(0);
 #[inline(always)]
 pub fn set_syscall_sp() {
     unsafe { asm!("mov {}, rsp", out(reg) SYSCALL_SP) }
-    unsafe {
-        kprintln!("SP {:x}", SYSCALL_SP);
-    }
+
 }
 
 #[derive(Debug)]
@@ -133,7 +130,11 @@ impl Process {
         }
     }
 
-    pub fn from_elf(elf: &elf::ElfFile<'_>, current_mapper: &mut impl Mapper<Size4KiB>, frame_allocator: &mut impl FrameAllocator<Size4KiB>) -> Process {
+    pub fn from_elf(
+        elf: &elf::ElfFile<'_>,
+        current_mapper: &mut impl Mapper<Size4KiB>,
+        frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    ) -> Process {
         let mut new_page_table = Box::new(PageTable::new());
         let mut mapper = unsafe { OffsetPageTable::new(&mut new_page_table, VirtAddr::new(0)) };
 
@@ -204,13 +205,14 @@ impl Process {
             }
 
             /* APIC register mapping for kernel */
-            mapper.identity_map(
-                PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(0xFEE00000)),
-                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
-                frame_allocator,
-            )
-            .expect("Unable to map apic regs for process!")
-            .flush();
+            mapper
+                .identity_map(
+                    PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(0xFEE00000)),
+                    PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                    frame_allocator,
+                )
+                .expect("Unable to map apic regs for process!")
+                .flush();
         }
         // Get new process ID
         let id = IDINDEX.load(core::sync::atomic::Ordering::SeqCst);
@@ -225,7 +227,7 @@ impl Process {
                         pheader.virtual_address,
                     ));
                     let pg_end = Page::<Size4KiB>::containing_address(VirtAddr::new(
-                        pheader.virtual_address + pheader.segment_mem_size
+                        pheader.virtual_address + pheader.segment_mem_size,
                     ));
 
                     let pages = Page::<Size4KiB>::range_inclusive(pg_start, pg_end);
@@ -239,33 +241,55 @@ impl Process {
                         /* Map virtual pages, allocate physical frames and copy the segment data
                          * from elf file to those frames */
                         for page in pages {
-                            let frame = frame_allocator.allocate_frame().expect("Unable to allocate physical frame for elf process!");
+                            let frame = frame_allocator
+                                .allocate_frame()
+                                .expect("Unable to allocate physical frame for elf process!");
 
                             let frame_addr = unsafe {
                                 // Identity map frame in current address space for copying
-                                current_mapper.identity_map(frame, PageTableFlags::WRITABLE | PageTableFlags::PRESENT, frame_allocator);
-                                
+                                current_mapper.identity_map(
+                                    frame,
+                                    PageTableFlags::WRITABLE | PageTableFlags::PRESENT,
+                                    frame_allocator,
+                                );
+
                                 core::slice::from_raw_parts_mut(
-                                    ((frame.start_address().as_u64() + (pheader.virtual_address - (pheader.virtual_address & !0xFFF)) as u64) as *mut u8),
+                                    ((frame.start_address().as_u64()
+                                        + (pheader.virtual_address
+                                            - (pheader.virtual_address & !0xFFF))
+                                            as u64)
+                                        as *mut u8),
                                     file_size.min(4096) as usize,
                                 )
                             };
 
                             /* Copy segment data */
-                            let offset = (pheader.segment_file_size-file_size) as usize;
-                            frame_addr.copy_from_slice(&data[offset..offset + file_size.min(4096) as usize]);
+                            let offset = (pheader.segment_file_size - file_size) as usize;
+                            frame_addr.copy_from_slice(
+                                &data[offset..offset + file_size.min(4096) as usize],
+                            );
 
                             /* Map frames in processes new address space*/
-                            unsafe { mapper.map_to(page, frame, PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::PRESENT, frame_allocator) }.expect("Unable to map elf segment!").flush();
+                            unsafe {
+                                mapper.map_to(
+                                    page,
+                                    frame,
+                                    PageTableFlags::WRITABLE
+                                        | PageTableFlags::USER_ACCESSIBLE
+                                        | PageTableFlags::PRESENT,
+                                    frame_allocator,
+                                )
+                            }
+                            .expect("Unable to map elf segment!")
+                            .flush();
 
                             if file_size > 4096 {
                                 file_size -= 4096;
                             }
                         }
                     }
-                     
                 }
-                _ => ()
+                _ => (),
             }
         }
 
@@ -274,7 +298,7 @@ impl Process {
             state: util::CpuState::default(),
             address_space: new_page_table,
             stack_base: (stack_page.start_address().as_u64() + 4095) as *mut u64,
-            entry: unsafe { core::mem::transmute(header.entry as *const ()) }
+            entry: unsafe { core::mem::transmute(header.entry as *const ()) },
         }
     }
 }

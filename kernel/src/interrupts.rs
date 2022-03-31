@@ -1,4 +1,5 @@
 use bit_field::BitField;
+use common::{kprintln, kprint, util::{out8, in8}};
 use core::{arch::asm, borrow::Borrow};
 
 use crate::{
@@ -10,17 +11,17 @@ use crate::{
     drivers::keyboard::Keyboard,
     gdt,
     processes::{SYSCALL_SP, SYSCALL_UMAP, SYSCALL_USP},
-    util::{self, in8, out8},
 };
+
 use lazy_static::lazy_static;
-use x86_64::{
+use common::x86_64::{
     registers::model_specific::Msr,
     structures::idt::{self, InterruptDescriptorTable},
 };
+use common::util;
 
 const IA32_APIC_BASE: u32 = 0x1b;
 
-use crate::drivers::pic::ChainedPics;
 use spin;
 
 pub const PIC_1_OFFSET: u8 = 32;
@@ -224,7 +225,7 @@ lazy_static! {
 }
 
 pub fn init() {
-    x86_64::instructions::interrupts::disable();
+    common::x86_64::instructions::interrupts::disable();
 
     IDT.load();
 
@@ -335,7 +336,7 @@ extern "x86-interrupt" fn pagefault_handler(
     _stack_frame: idt::InterruptStackFrame,
     _error_code: idt::PageFaultErrorCode,
 ) {
-    use x86_64::registers::control::Cr2;
+    use common::x86_64::registers::control::Cr2;
 
     kprintln!(
         "EXCPETION: PAGE FAULT\n{:#?}\n{:#?}\n",

@@ -117,6 +117,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "boot_image_generator",
+ "lazy_static",
+ "linked_list_allocator",
+ "macros",
+ "spinning_top 0.2.4",
+ "x86_64",
+]
+
+[[package]]
 name = "disk_image_generator"
 version = "0.1.0"
 dependencies = [
@@ -237,17 +249,20 @@ dependencies = [
  "aml",
  "bit_field",
  "boot_image_generator",
+ "common",
  "lazy_static",
- "linked_list_allocator",
  "macros",
  "spin 0.9.2",
- "spinning_top 0.2.4",
- "x86_64",
 ]
 
 [[package]]
 name = "kernel_loader"
 version = "0.1.0"
+dependencies = [
+ "boot_image_generator",
+ "common",
+ "macros",
+]
 
 [[package]]
 name = "lazy_static"

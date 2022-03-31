@@ -12,7 +12,7 @@ use iso::option::{ElToritoOpt, Opt};
 mod iso;
 
 const IN_FILES: &[&str] =
-    &["D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-uefi\\debug\\kernel.efi", "D:\\Developement\\Projects\\RustKernel\\boot_image_generator\\boot_image.bin"];
+    &["D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-uefi\\debug\\kernel_loader.efi", "D:\\Developement\\Projects\\RustKernel\\boot_image_generator\\boot_image.bin"];
 
 const OUT_FILES: &[&str] = &["efi/boot/bootx64.efi", "efi/boot/btimg.bin"];
 
@@ -39,7 +39,7 @@ fn main() -> io::Result<()> {
         };
 
         let bytes_per_sector = 512u16;
-        let mut total_sectors = 100u32;
+        let mut total_sectors = 5000u32;
 
         for file in IN_FILES.iter() {
             let from_file = File::open(file).expect("Unable to open file for reading!");

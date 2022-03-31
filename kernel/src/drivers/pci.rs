@@ -5,11 +5,11 @@ use aml::{
     AmlName,
 };
 use bit_field::BitField;
+use common::kprintln;
 
 use crate::{
     acpi::{aml::GLOBAL_AML, get_xsdt, mcfg::MCFG, Signature},
     drivers::device::{self, Device, DeviceType},
-    kprintln,
 };
 
 // use super::device::GLOBAL_DEVICES;

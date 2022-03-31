@@ -16,13 +16,21 @@ const DRIVER_PATH: &str =
 const CDRIVERS: &'static [&str] = &["driver"];
 const CDRIVER_PATH: &str = "D:\\Developement\\Projects\\RustKernel\\drivers-c\\c_driver";
 
+const OTHER: &[&str] =
+    &["D:\\Developement\\Projects\\RustKernel\\target\\kernel_target\\debug\\kernel"];
+
 const MAX_FILES: usize = 64;
 const HEADER_MAGIC: u16 = 0x6945;
 
 fn main() {
-    let files: Vec<PathBuf> = CDRIVERS
+    let files: Vec<PathBuf> = OTHER
         .iter()
-        .map(|f| PathBuf::from_str(CDRIVER_PATH).unwrap().join(f))
+        .map(|f| PathBuf::from_str(f).unwrap()) // Make sure kernel is first or everything breaks (I don't want a driver to be loaded as ther kernel :)
+        .chain(
+            CDRIVERS
+                .iter()
+                .map(|f| PathBuf::from_str(CDRIVER_PATH).unwrap().join(f)),
+        )
         // .chain(
         //     DRIVERS
         //         .iter()

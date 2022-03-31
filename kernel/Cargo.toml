@@ -1,33 +1,22 @@
-cargo-features = ["per-package-target"]
 [package]
 name = "kernel"
 version = "0.1.0"
-edition = "2018"
-default-target = "x86_64-unknown-uefi"
-# forced-target = ""
+edition = "2021"
+
+# [lib]
+# crate-type = ["staticlib"]
+# path = "src/main.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-# x86_64 = {version="=0.14.2", features=["const_fn"]}
-x86_64 = "*"
-# x86_64 = {path = "../../../Libraries/x86_64", features=["const_fn", "instructions"]}
 spin = {version="0.9.2", default-features=false, features=["mutex", "spin_mutex"]}
-linked_list_allocator = {path = "../../../Libraries/linked-list-allocator"}
-macros = {path="./src/macros"}
+macros = {path="../kernel_api/macros"}
 bit_field= "*"
 aml = {path="../../../acpi/aml"}
 boot_image_generator = { path = "../boot_image_generator" }
+common = {path = "../kernel_api/common"}
 
-# [patch.crates-io]
-# x86_64 = { path = "../../Libraries/x86_64" }
 
 [dependencies.lazy_static]
 version = "1.4.0"
 features = ["spin_no_std"]
-
-[dependencies.spinning_top]
-# version = "0.2.3"
-path = "../../../Libraries/spinning_top"
-# optional = true
-

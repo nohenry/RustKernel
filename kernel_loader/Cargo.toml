@@ -6,3 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+
+macros = {path="../kernel_api/macros"}
+boot_image_generator = { path = "../boot_image_generator" }
+common = {path = "../kernel_api/common"}

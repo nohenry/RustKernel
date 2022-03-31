@@ -1,43 +1,34 @@
 #![no_std]
 #![no_main]
-#![allow(non_snake_case)]
-#![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
-#![feature(naked_functions)]
 #![feature(crate_visibility_modifier)]
 #![feature(arbitrary_enum_discriminant)]
 #![allow(unconditional_panic)]
 
 extern crate alloc;
 
-mod drivers;
-mod efi;
-#[macro_use]
-mod util;
-mod acpi;
-mod allocator;
-mod gdt;
-mod interrupts;
-mod linked_list_allocator;
-mod mem;
-mod processes;
-mod elf;
-
-use core::arch::asm;
 use core::panic::PanicInfo;
+use core::{alloc::Layout, arch::asm};
 
 use macros::wchar;
-use x86_64::registers::control::{Cr3, Cr3Flags};
-use x86_64::structures::paging::{
-    Mapper, OffsetPageTable, PageTable, PageTableFlags, PhysFrame, Size4KiB, Translate, FrameAllocator,
-};
-use x86_64::{PhysAddr, VirtAddr};
 
-use crate::drivers::pci;
-use crate::efi::{
-    FileHandle, FileProtocol, FILE_HIDDEN, FILE_MODE_READ, FILE_READ_ONLY, FILE_SYSTEM, guid, FileInfo, get_system_table
+use common::{
+    allocator,
+    efi::{
+        self, get_system_table, guid, FileHandle, FileInfo, FileProtocol, FILE_HIDDEN,
+        FILE_MODE_READ, FILE_READ_ONLY, FILE_SYSTEM,
+    },
+    elf, gdt,
+    kernel_process::KernelProcess,
+    kprintln, mem, KernelParameters,
 };
-use crate::processes::{test_process, Process};
+
+use common::x86_64::registers::control::{Cr3, Cr3Flags};
+use common::x86_64::structures::paging::{
+    FrameAllocator, Mapper, OffsetPageTable, PageTable, PageTableFlags, PhysFrame, Size4KiB,
+    Translate,
+};
+use common::x86_64::{PhysAddr, VirtAddr};
 
 #[no_mangle]
 extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::SystemTable) {
@@ -58,7 +49,6 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
     let fileio = unsafe { &*fileio };
     let mut newfileio: *const FileProtocol = core::ptr::null();
 
-
     let res = (fileio.open)(
         fileio as _,
         &mut newfileio,
@@ -78,7 +68,7 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
         newfileio,
         &guid::FILE_INFO,
         &mut size,
-        buffer as *mut u8 as *mut ()
+        buffer as *mut u8 as *mut (),
     );
 
     if res != 0 {
@@ -87,44 +77,35 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
     kprintln!("{:?} {}", file_info, size);
 
     let mut file_data: *mut u8 = core::ptr::null_mut();
-    let table = get_system_table();
-    let res = table.boot_services().allocate_pool(file_info.file_size + 1, &mut file_data);
+    let efi_table = get_system_table();
+    let res = efi_table
+        .boot_services()
+        .allocate_pool(file_info.file_size + 1, &mut file_data);
 
     if res != 0 {
         kprintln!("An error occured! {:x} ALLOCATEPOOL(SFSP)", res);
     }
 
-    let file_data = unsafe {
-        core::slice::from_raw_parts_mut (
-            (file_data as *mut _) as *mut u8,
-            file_info.file_size + 1
-        )
+    let copy_file_data = unsafe {
+        core::slice::from_raw_parts_mut((file_data as *mut _) as *mut u8, file_info.file_size + 1)
     };
 
-    efi::read_fixed(unsafe { &*newfileio }, 0, file_info.file_size, file_data);
+    efi::read_fixed(unsafe { &*newfileio }, 0, file_info.file_size, copy_file_data);
 
     if res != 0 {
         kprintln!("An error occured! {:x} FREEPOOL(SFSP)", res);
     }
 
-    // let res = table.boot_services().free_pool(file_data);
-    
-    let boot_image = boot_fs::BootImageFS::new(file_data);
 
-    let wait = false;
-    while wait {
-        unsafe { asm!("pause") }
-    }
-    acpi::init();
-
+    // let mut copy_top = 0u64;
+    // unsafe {
+    //     asm!("mov {}, rsp", out(reg) copy_top);
+    // }
     // Iterate memorymap and exit boot services
     let memory_map = efi::get_memory_map(image_handle);
 
     // Setup global descriptor table :P
     gdt::init();
-
-    // Setup interrupts
-    interrupts::init();
 
     let mut mapper = unsafe { mem::init() };
     let mut frame_allocator = mem::PageTableFrameAllocator::new(memory_map);
@@ -144,59 +125,74 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
 
     allocator::init_heap(&mut mapper, &mut frame_allocator, false).expect("Unable to create heap!");
 
-    unsafe {
-        mapper.identity_map(
-            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(0xFEE00000)),
-            PageTableFlags::WRITABLE,
-            &mut frame_allocator,
-        );
-    }
+    let layout = Layout::from_size_align( file_info.file_size, 1).unwrap();
+    kprintln!("{:?}", &layout);
+    let img_data = unsafe { alloc::alloc::alloc(layout) };
+    kprintln!("{:p}", img_data);
+    let file_data = unsafe {
+        common::util::memcpy(img_data, file_data, file_info.file_size);
+        core::slice::from_raw_parts_mut(img_data, file_info.file_size)
+    };
+    kprintln!("Here");
+
+    // let res = efi_table.boot_services().free_pool(copy_file_data);
+    kprintln!("Potato");
+
+    let boot_image = boot_fs::BootImageFS::new(file_data);
 
     kprintln!("Boot Image: ");
     let mut image: Option<elf::ElfFile> = None;
     for file in boot_image.files() {
         kprintln!("  {}", file.name());
         let exec_file = elf::ElfFile::new(boot_image.file_data(file));
-        image = Some(exec_file);
+        image.get_or_insert(exec_file);
     }
 
+    let kernel_parameters = KernelParameters {
+        memory_map,
+        boot_image: &boot_image,
+    };
 
-
-    pci::init();
-    acpi::aml::init();
-    //pci::gather_devices();
-
-    // let i = 5 / 0;
-    // let addresses = [processes::test_process as u64]; // same as before
-
-    // for &address in &addresses {
-    //     let virt = VirtAddr::new(address);
-         // let res = mapper.translate(virt);
-    //     match res {
-    //         TranslateResult::Mapped { frame, flags, .. } => {
-    //             kprintln!("Frame: {:#x?} {:?}", frame, flags);
-    //         }
-    //         _ => (),
-    //     }
+    // let mut copy_bottom = 0u64;
+    // unsafe {
+    //     asm!("mov {}, rsp", out(reg) copy_bottom);
     // }
-    // interrupts::enable_apic();
 
-    processes::set_syscall_sp();
+    let process = KernelProcess::from_elf(
+        &image.expect("Unable to find kernel image!"),
+        0,
+        &mut mapper,
+        &mut frame_allocator,
+    );
 
-    let new_process = Process::from_elf(&image.unwrap(), &mut mapper, &mut frame_allocator);
+    let ptr: *const PageTable = process.address_space.as_ref();
+
+    let frame = match mapper.translate_addr(VirtAddr::new(ptr as u64)) {
+        Some(addr) => match PhysFrame::<Size4KiB>::from_start_address(addr) {
+            Err(_) => panic!("Unable to get frame! (1)"),
+            Ok(frame) => frame,
+        },
+        None => panic!("Unable to get frame! (2)"),
+    };
+    
+    kprintln!("{:p} {:p}", &memory_map, &frame);
 
     unsafe {
-        processes::jump_usermode(&mapper, &new_process);
+        asm!("", in("r13") process.stack_base, in("r14") process.entry, in("r15") &kernel_parameters);
+        Cr3::write(frame, Cr3Flags::empty());
+        asm!("mov rdi, r15");
+        asm!("mov rsp, r13");
+        asm!("mov rbp, r13");
+
+        // TODO: find a better way to do this
+        asm!("jmp r14");
     }
 
-    kprintln!("Done!");
-
     loop {}
-    // panic!("Kernel Finished");
 }
 
 #[panic_handler]
 fn panic_handler(_info: &PanicInfo) -> ! {
-    kprintln!("PANIC! {}\n", _info);
+    kprintln!("LOADER PANIC! {}\n", _info);
     loop {}
 }
