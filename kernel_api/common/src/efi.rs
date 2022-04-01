@@ -1,6 +1,6 @@
-use core::{ptr::null, sync::atomic::AtomicPtr};
+use core::{fmt::Debug, ptr::null, sync::atomic::AtomicPtr};
 
-use crate::kprintln;
+use crate::{kprintln, kprint};
 
 pub type Char16 = u16;
 pub type Handle = usize;
@@ -184,13 +184,24 @@ impl BootServices {
     ) -> usize {
         unsafe {
             let ptr = interface as *mut *const T;
-            (self.open_protocol)(handle, protocol, ptr as *mut *const (), agent_handle, controller_handle, attributes)
+            (self.open_protocol)(
+                handle,
+                protocol,
+                ptr as *mut *const (),
+                agent_handle,
+                controller_handle,
+                attributes,
+            )
         }
     }
 
     pub fn allocate_pool<T>(&self, size: usize, ptr: &mut *mut T) -> usize {
         let ptr = ptr as *mut *mut T;
-        (self.allocate_pool)(MemoryType::LoaderData, size * core::mem::size_of::<T>(), ptr as *mut *mut ())
+        (self.allocate_pool)(
+            MemoryType::LoaderData,
+            size * core::mem::size_of::<T>(),
+            ptr as *mut *mut (),
+        )
     }
 
     pub fn free_pool<T: ?Sized>(&self, ptr: &mut T) -> usize {
@@ -265,7 +276,7 @@ pub struct FileInfo {
     pub last_access_time: Time,
     pub modification_time: Time,
     pub attribute: u64,
-    pub file_name: [u16; 10]
+    pub file_name: [u16; 10],
 }
 
 impl Default for FileInfo {
@@ -284,16 +295,28 @@ pub fn io_volume(image_handle: Handle) -> *const FileIOInterface {
     let mut io_volume: *const FileIOInterface = core::ptr::null();
     let mut file: *const FileProtocol = core::ptr::null();
     unsafe {
-        
-        let res = table.boot_services().open_protocol(image_handle, &guid::LOADED_IMAGE_PROTOCOL, &mut loaded_image, image_handle, EMPTY_HANDLE, OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
+        let res = table.boot_services().open_protocol(
+            image_handle,
+            &guid::LOADED_IMAGE_PROTOCOL,
+            &mut loaded_image,
+            image_handle,
+            EMPTY_HANDLE,
+            OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,
+        );
         if res != 0 {
             kprintln!("An error occured! {:x} HandleProtocol(LIP)", res);
         }
 
         kprintln!("{:x?}", *loaded_image);
 
-        let res = table.boot_services().open_protocol((*loaded_image).device_handle, &guid::SIMPLE_FILE_SYSTEM_PROTOCOL, &mut io_volume, image_handle, EMPTY_HANDLE, OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
-
+        let res = table.boot_services().open_protocol(
+            (*loaded_image).device_handle,
+            &guid::SIMPLE_FILE_SYSTEM_PROTOCOL,
+            &mut io_volume,
+            image_handle,
+            EMPTY_HANDLE,
+            OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,
+        );
 
         if res != 0 {
             kprintln!("An error occured! {:x} HandleProtocol(SFSP)", res);
@@ -305,22 +328,21 @@ pub fn io_volume(image_handle: Handle) -> *const FileIOInterface {
 pub fn read_fixed(file: &FileProtocol, offset: usize, size: usize, buffer: &mut [u8]) -> usize {
     let mut read = 0usize;
 
-    let status = (file.set_position)(
-            file,
-            offset,
-        );
+    let status = (file.set_position)(file, offset);
 
     if status != 0 {
         kprintln!("An error occured! {:x} SETPOSTIOIN(SFSP)", status);
         return status;
     }
 
+    
     while read < size {
-        let mut remain = size - read;
+        let mut remain = 0x1000;
+        kprintln!("REading {:x} {:x}", size, read);
 
         let status = (file.read)(file, &mut remain, &mut buffer[read] as *mut _ as *mut ());
         if status != 0 {
-            kprintln!("An error occured! {:x} READ(SFSP)", status);
+            kprintln!("An error occured! {:x} READ(SFSP) {:x} {:x} {:p}", status, remain, read, buffer);
             return status;
         }
 
@@ -339,7 +361,7 @@ pub const FILE_SYSTEM: u64 = 4;
 pub struct FileHandle {}
 
 #[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum MemoryType {
     Reserved,
     LoaderCode,
@@ -367,6 +389,30 @@ impl MemoryType {
             // | Self::PersistentMemory
             Self::Conventional => true,
             _ => false,
+        }
+    }
+}
+
+impl Debug for MemoryType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match *self as u32 {
+            0 => write!(f, "Reserved"),
+            1 => write!(f, "LoaderCode"),
+            2 => write!(f, "LoaderData"),
+            3 => write!(f, "BootServicesCode"),
+            4 => write!(f, "BootServicesData"),
+            5 => write!(f, "RuntimeServicesCode"),
+            6 => write!(f, "RuntimeServicesData"),
+            7 => write!(f, "Conventional"),
+            8 => write!(f, "Unusable"),
+            9 => write!(f, "ACPIReclaim"),
+            10 => write!(f, "ACPINVS"),
+            11 => write!(f, "MemoryMappedIO"),
+            12 => write!(f, "MemoryMappedIOPortSpace"),
+            13 => write!(f, "PalCode"),
+            14 => write!(f, "PersistentMemory"),
+            15 => write!(f, "MaxMemoryType"),
+            _ => write!(f, "Unknown Memory Type"),
         }
     }
 }
@@ -516,9 +562,7 @@ pub fn get_image_base(image_handle: Handle) -> usize {
 }
 
 pub fn get_system_table() -> &'static SystemTable {
-    unsafe {
-        &*GLOBAL_SYSTEM_TABLE.load(core::sync::atomic::Ordering::SeqCst)
-    }
+    unsafe { &*GLOBAL_SYSTEM_TABLE.load(core::sync::atomic::Ordering::SeqCst) }
 }
 
 pub mod guid {

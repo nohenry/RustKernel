@@ -27,8 +27,8 @@ impl KernelProcess {
             Page::containing_address(VirtAddr::new(PROCESS_STACK_ADDRESS as u64));
 
         let stack_page_end =
-            Page::containing_address(VirtAddr::new(PROCESS_STACK_ADDRESS as u64 - 4 * 4096));
-        let stack_pages = Page::range_inclusive(stack_page_end, stack_page_end);
+            Page::containing_address(VirtAddr::new(PROCESS_STACK_ADDRESS as u64 - 10 * 4096));
+        Page::range_inclusive(stack_page_end, stack_page_start)
     }
 
     pub fn from_elf(
@@ -46,6 +46,7 @@ impl KernelProcess {
             PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
 
         for page in stack_pages {
+            kprintln!("Process Stack {:?}", page);
             let stack_frame = frame_allocator
                 .allocate_frame()
                 .expect("Unable to allocate page for process stack!");
@@ -74,12 +75,12 @@ impl KernelProcess {
         let kernel_code_frames =
             PhysFrame::<Size4KiB>::range_inclusive(kernel_code_start, kernel_code_end);
 
-        // let kernel_stack_start =
-        //     PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_stack - 4 * 4096));
-        // let kernel_stack_end =
-        //     PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_stack));
-        // let kernel_stack_frames =
-        //     PhysFrame::<Size4KiB>::range_inclusive(kernel_stack_start, kernel_stack_end);
+        let kernel_stack_start =
+            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_stack - 4 * 4096));
+        let kernel_stack_end =
+            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_stack));
+        let kernel_stack_frames =
+            PhysFrame::<Size4KiB>::range_inclusive(kernel_stack_start, kernel_stack_end);
 
         unsafe {
             for frame in kernel_code_frames {
@@ -96,16 +97,16 @@ impl KernelProcess {
                     .flush();
             }
 
-            // for frame in kernel_stack_frames {
-            //     mapper
-            //         .identity_map(
-            //             frame,
-            //             PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
-            //             frame_allocator,
-            //         )
-            //         .expect("Unable to identity map!")
-            //         .flush();
-            // }
+            for frame in kernel_stack_frames {
+                mapper
+                    .identity_map(
+                        frame,
+                        PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                        frame_allocator,
+                    )
+                    .expect("Unable to identity map!")
+                    .flush();
+            }
 
             /* APIC register mapping for kernel */
             mapper
@@ -195,8 +196,12 @@ impl KernelProcess {
 
         KernelProcess {
             address_space: new_page_table,
-            stack_base: stack_page.start_address().as_u64() as *mut u64,
+            stack_base: PROCESS_STACK_ADDRESS as *mut u64,
             entry: unsafe { core::mem::transmute(header.entry as *const ()) },
         }
+    }
+
+    pub fn get_pt(&mut self) -> OffsetPageTable {
+        unsafe { OffsetPageTable::new(&mut self.address_space, VirtAddr::new(0)) }
     }
 }

@@ -41,6 +41,7 @@ impl <'a> Iterator for FileIterator<'a> {
 
 }
 
+#[derive(Debug)]
 pub struct BootImageFS<'a> {
     data: &'a [u8],
 

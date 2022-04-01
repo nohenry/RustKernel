@@ -10,6 +10,10 @@ extern crate alloc;
 use core::panic::PanicInfo;
 use core::{alloc::Layout, arch::asm};
 
+use alloc::rc::Rc;
+use alloc::sync::Arc;
+use common::efi::{MemoryDescriptor, GLOBAL_SYSTEM_TABLE};
+use common::util;
 use macros::wchar;
 
 use common::{
@@ -29,6 +33,18 @@ use common::x86_64::structures::paging::{
     Translate,
 };
 use common::x86_64::{PhysAddr, VirtAddr};
+
+fn addr(a: usize, stack_top: usize, new_stack_top: usize) -> usize {
+    let add = stack_top - a;
+    new_stack_top - add
+}
+
+fn addr_sized<T>(a: &T, stack_top: usize, new_stack_top: usize) -> &T {
+    let ptr = a as *const _ as *const ();
+    let add = stack_top - ptr as usize;
+    let newptr = new_stack_top - add;
+    unsafe { &*(newptr as *const () as *const T) }
+}
 
 #[no_mangle]
 extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::SystemTable) {
@@ -90,17 +106,21 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
         core::slice::from_raw_parts_mut((file_data as *mut _) as *mut u8, file_info.file_size + 1)
     };
 
-    efi::read_fixed(unsafe { &*newfileio }, 0, file_info.file_size, copy_file_data);
+    efi::read_fixed(
+        unsafe { &*newfileio },
+        0,
+        file_info.file_size,
+        copy_file_data,
+    );
 
     if res != 0 {
         kprintln!("An error occured! {:x} FREEPOOL(SFSP)", res);
     }
 
-
-    // let mut copy_top = 0u64;
-    // unsafe {
-    //     asm!("mov {}, rsp", out(reg) copy_top);
-    // }
+    let mut copy_top = 0u64;
+    unsafe {
+        asm!("mov {}, rsp", out(reg) copy_top);
+    }
     // Iterate memorymap and exit boot services
     let memory_map = efi::get_memory_map(image_handle);
 
@@ -125,7 +145,7 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
 
     allocator::init_heap(&mut mapper, &mut frame_allocator, false).expect("Unable to create heap!");
 
-    let layout = Layout::from_size_align( file_info.file_size, 1).unwrap();
+    let layout = Layout::from_size_align(file_info.file_size, 1).unwrap();
     kprintln!("{:?}", &layout);
     let img_data = unsafe { alloc::alloc::alloc(layout) };
     kprintln!("{:p}", img_data);
@@ -148,22 +168,37 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
         image.get_or_insert(exec_file);
     }
 
-    let kernel_parameters = KernelParameters {
-        memory_map,
-        boot_image: &boot_image,
-    };
-
     // let mut copy_bottom = 0u64;
     // unsafe {
     //     asm!("mov {}, rsp", out(reg) copy_bottom);
     // }
 
-    let process = KernelProcess::from_elf(
+    let mut process = KernelProcess::from_elf(
         &image.expect("Unable to find kernel image!"),
-        0,
+        copy_top + 0x1b40,
         &mut mapper,
         &mut frame_allocator,
     );
+
+
+    let kernel_parameters = KernelParameters {
+        memory_map: unsafe {
+            core::slice::from_raw_parts(
+                addr(
+                    memory_map as *const _ as *const () as usize,
+                    &process as *const KernelProcess as usize + 80,
+                    process.stack_base as usize,
+                ) as *const MemoryDescriptor,
+                memory_map.len(),
+            )
+        },
+        boot_image: addr_sized(
+            &boot_image,
+            &process as *const KernelProcess as usize + 80,
+            process.stack_base as usize,
+        ),
+        system_table: GLOBAL_SYSTEM_TABLE.load(core::sync::atomic::Ordering::SeqCst),
+    };
 
     let ptr: *const PageTable = process.address_space.as_ref();
 
@@ -174,12 +209,77 @@ extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::System
         },
         None => panic!("Unable to get frame! (2)"),
     };
+
+    let mut inc = 0;
+    let mut iter = move |proc: &mut KernelProcess| {
+        let stack = proc.stack_base as u64;
+        let ppt = proc.get_pt();
+        match ppt.translate_addr(VirtAddr::new(stack - inc)) {
+            Some(s) => {
+                inc += 4096;
+                return Some(s);
+            }
+            None => return None,
+        }
+    };
+
+    let mut cframe = None;
+    while let Some(s) = (iter)(&mut process) {
+        cframe.get_or_insert(s);
+        let pf = PhysFrame::<Size4KiB>::containing_address(s);
+        unsafe {
+            mapper.identity_map(
+                pf,
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                &mut frame_allocator,
+            );
+        }
+        kprintln!("addr {:?}", s);
+    }
+    kprintln!(
+        "Params {:p} {:p}",
+        kernel_parameters.boot_image,
+        kernel_parameters.memory_map
+    );
+    kprintln!(
+        "Stack {:p} {:p} {:x}",
+        &memory_map,
+        &frame,
+        &frame as *const _ as usize - &memory_map as *const _ as usize
+    );
+    let ssize = &frame as *const _ as usize - &memory_map as *const _ as usize;
+    kprintln!("Copying from {:p} to {:p} ({:x} bytes)",(cframe.unwrap().as_u64() - ssize as u64) as *mut u8,  &memory_map as *const _ as *const u8, size);
+    unsafe {
+        util::memcpy(
+            (cframe.unwrap().as_u64() - ssize as u64) as *mut u8,
+            &memory_map as *const _ as *const u8,
+            ssize,
+        );
+    }
+    kprintln!("System Table: {:p}", GLOBAL_SYSTEM_TABLE.load(core::sync::atomic::Ordering::SeqCst));
+    // loop {}
+    kprintln!(
+        "Params {:p} {:x}",
+        &kernel_parameters,
+       &process as *const KernelProcess as usize + 16 
+    );
+    // TODO: copy current stack to new stack
+    let ad = addr_sized(
+        &kernel_parameters,
+        &process as *const KernelProcess as usize + 80,
+        process.stack_base as usize,
+    );
+    kprintln!("{:p}", ad);
     
-    kprintln!("{:p} {:p}", &memory_map, &frame);
 
     unsafe {
-        asm!("", in("r13") process.stack_base, in("r14") process.entry, in("r15") &kernel_parameters);
+        asm!("", in("r13") process.stack_base, in("r14") process.entry, in("r15") ad);
         Cr3::write(frame, Cr3Flags::empty());
+        // asm!("int3");
+        // asm!("1: jmp 1b");
+        // while true {
+        //     unsafe { asm!("pause") }
+        // }
         asm!("mov rdi, r15");
         asm!("mov rsp, r13");
         asm!("mov rbp, r13");

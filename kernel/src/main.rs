@@ -6,6 +6,7 @@
 #![feature(naked_functions)]
 #![feature(crate_visibility_modifier)]
 #![feature(arbitrary_enum_discriminant)]
+#![feature(bench_black_box)]
 #![allow(unconditional_panic)]
 
 extern crate alloc;
@@ -26,7 +27,7 @@ use common::x86_64::structures::paging::{
     Translate,
 };
 use common::x86_64::{PhysAddr, VirtAddr};
-use common::{allocator, elf, gdt, kprintln, mem, KernelParameters};
+use common::{allocator, elf, gdt, kprintln, mem, KernelParameters, efi};
 
 use crate::drivers::pci;
 use crate::processes::{test_process, Process};
@@ -37,11 +38,18 @@ use common::efi::{
 
 #[no_mangle]
 pub extern "C" fn _start(parameters: &KernelParameters) -> ! {
-    kprintln!("Kernel...");
-    let wait = false;
-    while wait {
-        unsafe { asm!("pause") }
+    
+    kprintln!("Kernel... {:p}", parameters.system_table);
+    // let wait = true;
+    // while core::convert::identity(wait) {
+    //     unsafe { asm!("pause") }
+    // }
+    
+    unsafe {
+        // Set the static system table reference
+        efi::register_global_system_table(parameters.system_table).unwrap();
     }
+
     acpi::init();
 
     // Setup interrupts
