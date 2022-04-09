@@ -4,7 +4,8 @@ use crate::linked_list_allocator::{Heap, LockedHeap};
 
 use x86_64::{
     structures::paging::{
-        mapper::MapToError, FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB,
+        mapper::MapToError, page::PageRangeInclusive, FrameAllocator, Mapper, Page, PageTableFlags,
+        Size4KiB,
     },
     VirtAddr,
 };
@@ -20,18 +21,27 @@ fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
     panic!("allocation error: {:?}", layout)
 }
 
-pub fn init_heap(
+pub fn init_heap(heap: &Heap) {
+    unsafe {
+        ALLOCATOR.lock().update(heap);
+    }
+}
+
+pub fn heap_range(offset: usize) -> PageRangeInclusive {
+    let heap_start = VirtAddr::new((HEAP_START + offset) as u64);
+    let heap_end = heap_start + (HEAP_SIZE + offset) - 1u64;
+    let heap_start_page = Page::<Size4KiB>::containing_address(heap_start);
+    let heap_end_page = Page::containing_address(heap_end);
+    Page::range_inclusive(heap_start_page, heap_end_page)
+}
+
+pub fn init_heap_new(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    offset: usize,
     user: bool,
 ) -> Result<(), MapToError<Size4KiB>> {
-    let page_range = {
-        let heap_start = VirtAddr::new(HEAP_START as u64);
-        let heap_end = heap_start + HEAP_SIZE - 1u64;
-        let heap_start_page = Page::<Size4KiB>::containing_address(heap_start);
-        let heap_end_page = Page::containing_address(heap_end);
-        Page::range_inclusive(heap_start_page, heap_end_page)
-    };
+    let page_range = heap_range(offset);
 
     for page in page_range {
         let frame = frame_allocator
@@ -48,8 +58,16 @@ pub fn init_heap(
     }
 
     unsafe {
-        ALLOCATOR.lock().init(HEAP_START, HEAP_SIZE);
+        ALLOCATOR.lock().init(HEAP_START + offset, HEAP_SIZE);
     }
 
     Ok(())
+}
+
+pub fn heap_top() -> usize {
+    unsafe { ALLOCATOR.lock().top() }
+}
+
+pub fn heap() -> Heap {
+    unsafe { ALLOCATOR.heap() }
 }

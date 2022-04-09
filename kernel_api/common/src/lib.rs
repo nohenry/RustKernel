@@ -16,14 +16,21 @@ mod linked_list_allocator;
 use core::fmt::Debug;
 
 use efi::SystemTable;
+use mem::PageTableFrameAllocator;
 pub use x86_64;
+use x86_64::structures::paging::PageTable;
 
 extern crate alloc;
 
 pub struct KernelParameters<'a> {
     pub memory_map: &'a [efi::MemoryDescriptor],
-    pub boot_image: &'a boot_fs::BootImageFS<'a>,
+    // Physical address of boot image
+    pub boot_image: (u64, u64),
+    pub frame_allocator: PageTableFrameAllocator<'a>,
     pub system_table: *mut SystemTable,
+    // pub heap_top: usize,
+    pub heap: linked_list_allocator::Heap,
+    // pub page_table: PageTable,
 }
 
 impl Debug for KernelParameters<'_> {

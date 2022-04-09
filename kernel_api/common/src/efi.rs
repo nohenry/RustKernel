@@ -1,6 +1,6 @@
 use core::{fmt::Debug, ptr::null, sync::atomic::AtomicPtr};
 
-use crate::{kprintln, kprint};
+use crate::{kprint, kprintln};
 
 pub type Char16 = u16;
 pub type Handle = usize;
@@ -29,7 +29,7 @@ pub struct SystemTable {
     console_out: Handle,
     console_error_handle: Handle,
     console_error: *const u8,
-    runtime_services: *const u8,
+    runtime_services: *const RuntimeServices,
     boot_services: *const BootServices,
     entry_count: usize,
     configuration_table: *mut ConfigurationTable,
@@ -42,6 +42,10 @@ impl SystemTable {
 
     pub fn boot_services(&self) -> &BootServices {
         unsafe { &*self.boot_services }
+    }
+
+    pub fn runtime_services(&self) -> &RuntimeServices {
+        unsafe { &*self.runtime_services }
     }
 }
 
@@ -81,6 +85,34 @@ impl Iterator for ConfigurationTableIterator {
         } else {
             None
         }
+    }
+}
+
+#[repr(C)]
+pub struct RuntimeServices {
+    header: TableHeader,
+
+    /*
+    Time services
+    */
+    get_time: Handle,
+    set_time: Handle,
+    get_wakeup_time: Handle,
+    set_wakeup_time: Handle,
+
+    /*
+    Virtual Memory services
+    */
+    set_virtual_address_map: fn(usize, usize, u32, *const MemoryDescriptor) -> usize,
+    convert_pointer: fn() -> usize,
+}
+
+impl RuntimeServices {
+    pub fn set_virtual_address_map(&self, map: MemoryMap<'_>, version: u32) -> usize {
+        let map_size = core::mem::size_of_val(map);
+        let entry_size = core::mem::size_of::<MemoryDescriptor>();
+        let map_ptr = map.as_ptr();
+        (self.set_virtual_address_map)(map_size, entry_size, version, map_ptr)
     }
 }
 
@@ -335,14 +367,18 @@ pub fn read_fixed(file: &FileProtocol, offset: usize, size: usize, buffer: &mut 
         return status;
     }
 
-    
     while read < size {
         let mut remain = 0x1000;
-        kprintln!("REading {:x} {:x}", size, read);
 
         let status = (file.read)(file, &mut remain, &mut buffer[read] as *mut _ as *mut ());
         if status != 0 {
-            kprintln!("An error occured! {:x} READ(SFSP) {:x} {:x} {:p}", status, remain, read, buffer);
+            kprintln!(
+                "An error occured! {:x} READ(SFSP) {:x} {:x} {:p}",
+                status,
+                remain,
+                read,
+                buffer
+            );
             return status;
         }
 
@@ -384,10 +420,10 @@ pub enum MemoryType {
 impl MemoryType {
     pub fn is_usable(&self) -> bool {
         match self {
-            // Self::BootServicesCode
-            // | Self::BootServicesData
-            // | Self::PersistentMemory
-            Self::Conventional => true,
+            Self::BootServicesCode
+            // | Self::BootServicesData 
+            // | Self::PersistentMemory,
+            | Self::Conventional => true,
             _ => false,
         }
     }
@@ -437,8 +473,14 @@ pub struct MemoryDescriptor {
     pub virtual_address: usize,
     pub size: usize,
     pub attributes: u64,
-    r1: u64,
+    pub r1: u64,
     // r2: u32,
+}
+
+impl MemoryDescriptor {
+    pub fn is_runtime(&self) -> bool {
+        self.attributes & 0x8000000000000000 > 0
+    }
 }
 
 pub type MemoryMap<'a> = &'a [MemoryDescriptor];
@@ -493,7 +535,7 @@ pub static mut DESCRIPTORS: [MemoryDescriptor; 1024] = [MemoryDescriptor {
     virtual_address: 0,
 }; 1024];
 
-pub fn get_memory_map(image_handle: Handle) -> MemoryMap<'static> {
+pub fn get_memory_map(image_handle: Handle) -> (MemoryMap<'static>, u32) {
     let table = GLOBAL_SYSTEM_TABLE.load(core::sync::atomic::Ordering::SeqCst);
 
     unsafe {
@@ -512,35 +554,51 @@ pub fn get_memory_map(image_handle: Handle) -> MemoryMap<'static> {
 
         assert!(result == 0, " {:x?} {:x}", result, BUFFER_TOO_SMALL);
 
-        let mut conventional = 0;
-        let mut all = 0;
-
-        for desc in &DESCRIPTORS {
-            if desc.physical_address == 0 && desc.virtual_address == 0 && desc.size == 0 {
-                break;
-            }
-
-            if desc.memory_type.is_usable() {
-                all += desc.size * 4096;
-            }
-            if let MemoryType::Conventional = desc.memory_type {
-                conventional += desc.size * 4096;
-            }
-
-            kprintln!(
-                "{:016x} {:016x} {:?}",
-                desc.physical_address,
-                desc.size * 4096,
-                desc.memory_type
-            );
-        }
-        kprintln!("all: {:x?}, conv: {:x}", all, conventional);
+        // print_memory_map(&DESCRIPTORS);
 
         let result = ((*(*table).boot_services).exit_boot_services)(image_handle, key);
         assert!(result == 0, "Unable to exit boot services! {:x}", result);
         kprintln!("Exited boot services!");
-        return &DESCRIPTORS;
+        return (&DESCRIPTORS, mdesc_version);
     }
+}
+
+pub fn print_memory_map(map: MemoryMap<'_>) {
+    let mut conventional = 0;
+    let mut all = 0;
+    for desc in map {
+        if desc.physical_address == 0 && desc.virtual_address == 0 && desc.size == 0 {
+            break;
+        }
+
+        all += desc.size * 4096;
+        // if desc.memory_type.is_usable() {
+        // }
+        if let MemoryType::Conventional = desc.memory_type {
+            conventional += desc.size * 4096;
+        }
+
+        kprintln!(
+            "{:016x} {:016x} {:016x} {:?} Runtime {}",
+            desc.physical_address,
+            desc.virtual_address,
+            desc.size * 4096,
+            desc.memory_type,
+            desc.attributes & 0x8000000000000000 > 0
+        );
+    }
+    kprintln!("all: {:x?}, conv: {:x}", all, conventional);
+}
+
+pub fn get_mem_size(map: MemoryMap<'_>) -> usize {
+    let mut all = 0;
+    for desc in map {
+        if desc.physical_address == 0 && desc.virtual_address == 0 && desc.size == 0 {
+            break;
+        }
+        all += desc.size * 4096;
+    }
+    all
 }
 
 pub fn get_image_base(image_handle: Handle) -> usize {

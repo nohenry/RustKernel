@@ -1,5 +1,9 @@
 use bit_field::BitField;
-use common::{kprintln, kprint, util::{out8, in8}};
+use common::{
+    kprint, kprintln,
+    util::{in8, out8},
+    x86_64::PhysAddr,
+};
 use core::{arch::asm, borrow::Borrow};
 
 use crate::{
@@ -13,12 +17,12 @@ use crate::{
     processes::{SYSCALL_SP, SYSCALL_UMAP, SYSCALL_USP},
 };
 
-use lazy_static::lazy_static;
+use common::util;
 use common::x86_64::{
     registers::model_specific::Msr,
     structures::idt::{self, InterruptDescriptorTable},
 };
-use common::util;
+use lazy_static::lazy_static;
 
 const IA32_APIC_BASE: u32 = 0x1b;
 
@@ -540,6 +544,8 @@ impl IOApic {
             } => self.base = *io_apic_address as u64,
             _ => (),
         }
+
+        common::mem::map_phys(PhysAddr::new(self.base), 4096);
 
         let mut re = RedirectionEntry::new();
         re.set_vector(0x45);

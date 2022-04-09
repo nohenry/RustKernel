@@ -4,7 +4,6 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-       
         {
             "type": "lldb",
             "request": "launch",
@@ -24,12 +23,39 @@
             "cwd": "${workspaceFolder}"
         },
         {
-            "type": "cppvsdbg",
+            "type": "cppdbg",
             "request": "launch",
             // "program": "D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-uefi\\debug\\RustKernel.efi",
             "program": "${workspaceRoot}/target/debug/disk_image_generator.exe",
             "name": "Disk Image Generator",
             "cwd": "${workspaceFolder}",
+            "setupCommands": [
+                {
+                    "text": "set logging on"
+                }
+            ],
+            "logging": {
+                "trace": true,
+                "engineLogging": true,
+                "programOutput": true,
+                "traceResponse": true
+            }
+            // "miDebuggerServerAddress" : "localhost:1234",
+        },
+        {
+            "type": "cppdbg",
+            "request": "launch",
+            // "program": "D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-uefi\\debug\\RustKernel.efi",
+            "program": "D:/Developement/Projects/RustKernel/target/kernel_target/debug/kernel",
+            // "program": "${workspaceRoot}/target/debug/disk_image_generator.exe",
+            // "program": "",
+            "name": "Kernel",
+            "cwd": "${workspaceFolder}",
+            // "MIMode": "gdb",
+            // "miDebuggerServerAddress": "10.0.0.77:1234",
+            // "miDebuggerPath": "C:\\cygwin64\\bin\\gdb.EXE",
+            "miDebuggerPath": "D:\\Developement\\Projects\\RustKernel\\misc\\debug.bat",
+            "setupCommands": []
             // "miDebuggerServerAddress" : "localhost:1234",
         },
         {

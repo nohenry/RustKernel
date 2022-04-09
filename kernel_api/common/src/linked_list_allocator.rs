@@ -6,8 +6,9 @@ use core::{
 
 use core::ops::Deref;
 use linked_list_allocator::hole::HoleList;
-use spinning_top::Spinlock;
+use spinning_top::{Spinlock, lock_api::RawMutex};
 
+#[derive(Clone)]
 pub struct Heap {
     bottom: usize,
     size: usize,
@@ -24,6 +25,13 @@ impl Heap {
             used: 0,
             holes: HoleList::empty(),
         }
+    }
+
+    pub fn update(&mut self, other: &Heap) {
+        self.bottom = other.bottom;
+        self.size = other.size;
+        self.used = other.used;
+        self.holes = other.holes.clone();
     }
 
     /// Initializes an empty heap
@@ -178,6 +186,7 @@ unsafe impl Allocator for LockedHeap {
     }
 }
 
+// #[derive(Clone)]
 pub struct LockedHeap(Spinlock<Heap>);
 
 impl LockedHeap {
@@ -197,6 +206,14 @@ impl LockedHeap {
             used: 0,
             holes: HoleList::new(heap_bottom, heap_size),
         }))
+    }
+
+    pub fn heap(&self) -> Heap {
+        self.0.lock().clone()
+    }
+
+    pub fn update(&mut self, heap: &Heap) {
+        self.0.lock().update(heap) ;
     }
 }
 
