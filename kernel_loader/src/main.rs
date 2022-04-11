@@ -27,7 +27,7 @@ use common::{
         FILE_MODE_READ, FILE_READ_ONLY, FILE_SYSTEM,
     },
     elf, gdt,
-    kernel_process::KernelProcess,
+    process::Process,
     kprintln, mem, KernelParameters,
 };
 
@@ -195,7 +195,7 @@ fn run(image_handle: efi::Handle, system_table: *mut efi::SystemTable) -> ! {
 
     let mem = efi::get_mem_size(memory_map);
 
-    let mut process = KernelProcess::from_elf(
+    let mut process = Process::kernel_from_elf(
         &image.expect("Unable to find kernel image!"),
         unsafe { STACK_START },
         unsafe { STACK_END },
@@ -245,7 +245,7 @@ fn run(image_handle: efi::Handle, system_table: *mut efi::SystemTable) -> ! {
     }
 
     let mut inc = 0;
-    let mut iter = move |proc: &mut KernelProcess| {
+    let mut iter = move |proc: &mut Process| {
         let stack = proc.stack_base as u64;
         let ppt = proc.get_pt();
         match ppt.translate_addr(VirtAddr::new(stack - inc)) {
@@ -428,12 +428,12 @@ fn run(image_handle: efi::Handle, system_table: *mut efi::SystemTable) -> ! {
         heap: allocator::heap(),
         // page_table: npt.clone()
     };
-    // kprintln!("Parameters {:p}", &kernel_parameters);
+    let val = frame.start_address().as_u64();
+    kprintln!("Parameters {:p}", &kernel_parameters);
 
     unsafe {
         asm!("", in("r13") process.stack_base, in("r14") process.entry, in("r15") &kernel_parameters);
         //  Cr3::write(frame, Cr3Flags::empty());
-        let val = frame.start_address().as_u64();
         asm!("mov cr3, {}", in(reg) val, options(nostack, preserves_flags));
 
         asm!("mov rdi, r15");

@@ -5,7 +5,7 @@ use aml::{
     AmlName,
 };
 use bit_field::BitField;
-use common::kprintln;
+use common::{kprintln, size_tb, x86_64::{PhysAddr, VirtAddr}};
 
 use crate::{
     acpi::{aml::GLOBAL_AML, get_xsdt, mcfg::MCFG, Signature},
@@ -13,6 +13,7 @@ use crate::{
 };
 
 // use super::device::GLOBAL_DEVICES;
+const CONFIG_SPACE: u64= size_tb!(1);
 
 // pub static GLOBAL_PCI: AtomicPtr<PCI> = AtomicPtr::new(core::ptr::null_mut());
 pub static mut GLOBAL_PCI: PCI = PCI::new();
@@ -27,7 +28,23 @@ pub fn init() {
 
     unsafe {
         GLOBAL_PCI.mcfg = Some(mcfg);
+        
+        // GLOBAL_PCI.traverse_devices(|segment, bus, device, function| {
+        //     let seg = &mcfg[segment];
+        //     let address: *const u64 = PCI::form_address(seg.address, bus - seg.bus_start, device, function, 0);
+        //     let address = address as u64;
+
+        //     kprintln!("Mapping {:x} - {:x}", address, CONFIG_SPACE + (address - seg.address));
+
+        //     common::mem::map_virt(PhysAddr::new(address), VirtAddr::new(CONFIG_SPACE) + (address - seg.address), 4095);
+        // });
     }
+
+
+    // for ent in mcfg.iter() {
+    //     kprintln!("Mapping {:x}", ent.address);
+    //     common::mem::map_phys(PhysAddr::new(ent.address as _), 1).expect("Unable to map pci segment space!");
+    // }
 }
 
 pub fn gather_devices() {
@@ -315,39 +332,46 @@ impl<'a> PCI<'a> {
         }
     }
 
-    fn form_address<T>(address: u64, bus: u8, device: u8, function: u8, offset: u16) -> *const T {
+    fn form_address<T>(&self, address: u64, bus: u8, device: u8, function: u8, offset: u16) -> *const T {
+        let seg = &self.mcfg.unwrap()[0];
         let address = address
             + ((bus as u64) << 20
                 | (device as u64) << 15
                 | (function as u64) << 12
                 | (offset as u64) & 0xFFF);
+        let address = address - seg.address + CONFIG_SPACE;
         address as *const T
     }
 
-    fn form_address_mut<T>(address: u64, bus: u8, device: u8, function: u8, offset: u16) -> *mut T {
+    fn form_address_mut<T>(&self, address: u64, bus: u8, device: u8, function: u8, offset: u16) -> *mut T {
+        let seg = &self.mcfg.unwrap()[0];
         let address = address
             + ((bus as u64) << 20
                 | (device as u64) << 15
                 | (function as u64) << 12
                 | (offset as u64) & 0xFFF);
+        let address = address - seg.address + CONFIG_SPACE;
         address as *mut T
     }
 
     pub fn read_u8(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u8 {
         let seg = &self.mcfg.unwrap()[segment];
-        let address = PCI::form_address(seg.address, bus - seg.bus_start, device, function, offset);
+        let address = self.form_address(seg.address, bus - seg.bus_start, device, function, offset);
+        self.map_address(segment, bus, device, function);
         unsafe { core::ptr::read_volatile(address) }
     }
 
     pub fn read_u16(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u16 {
         let seg = &self.mcfg.unwrap()[segment];
-        let address = PCI::form_address(seg.address, bus - seg.bus_start, device, function, offset);
+        let address = self.form_address(seg.address, bus - seg.bus_start, device, function, offset);
+        self.map_address(segment, bus, device, function);
         unsafe { core::ptr::read_volatile(address) }
     }
 
     pub fn read_u32(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16) -> u32 {
         let seg = &self.mcfg.unwrap()[segment];
-        let address = PCI::form_address(seg.address, bus - seg.bus_start, device, function, offset);
+        let address = self.form_address(seg.address, bus - seg.bus_start, device, function, offset);
+        self.map_address(segment, bus, device, function);
         unsafe { core::ptr::read_volatile(address) }
     }
 
@@ -362,7 +386,8 @@ impl<'a> PCI<'a> {
     ) {
         let seg = &self.mcfg.unwrap()[segment];
         let address =
-            PCI::form_address_mut(seg.address, bus - seg.bus_start, device, function, offset);
+            self.form_address_mut(seg.address, bus - seg.bus_start, device, function, offset);
+        self.map_address(segment, bus, device, function);
         unsafe { core::ptr::write_volatile(address, value) }
     }
 
@@ -377,7 +402,8 @@ impl<'a> PCI<'a> {
     ) {
         let seg = &self.mcfg.unwrap()[segment];
         let address =
-            PCI::form_address_mut(seg.address, bus - seg.bus_start, device, function, offset);
+            self.form_address_mut(seg.address, bus - seg.bus_start, device, function, offset);
+        self.map_address(segment, bus, device, function);
         unsafe { core::ptr::write_volatile(address, value) }
     }
 
@@ -392,8 +418,20 @@ impl<'a> PCI<'a> {
     ) {
         let seg = &self.mcfg.unwrap()[segment];
         let address =
-            PCI::form_address_mut(seg.address, bus - seg.bus_start, device, function, offset);
+            self.form_address_mut(seg.address, bus - seg.bus_start, device, function, offset);
+        self.map_address(segment, bus, device, function);
         unsafe { core::ptr::write_volatile(address, value) }
+    }
+
+    pub fn map_address(&self, segment: u16,
+        bus: u8,
+        device: u8,
+        function: u8,) {
+
+        let seg = &self.mcfg.unwrap()[segment];
+        let address: *const u64 = self.form_address(seg.address, bus - seg.bus_start, device, function, 0);
+        let address = address as u64;
+        common::mem::map_virt(PhysAddr::new(seg.address as u64), VirtAddr::new(address), 4095);
     }
 }
 

@@ -10,7 +10,7 @@ pub mod serial;
 pub mod gdt;
 pub mod mem;
 pub mod allocator;
-pub mod kernel_process;
+pub mod process;
 mod linked_list_allocator;
 
 use core::fmt::Debug;

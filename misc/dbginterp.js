@@ -22,11 +22,11 @@ gdb.stdout.on('data', (data) => {
     if (data.includes('cygdrive')) {
         data = data.toString().replaceAll('/cygdrive/d/', 'D:/');
     }
-    if (data.includes('D:\\\\Developement\\\\Projects\\\\RustKernel/C:')) {
-        data = data.toString().replaceAll('D:\\\\Developement\\\\Projects\\\\RustKernel/C:', 'C:');
+    if (data.includes('/D:')) {
+        data = data.toString().replaceAll(/D:(\\\\[^\\]*)+\/D:/gm, 'D:');
     }
-    if (data.includes('D:\\\\Developement\\\\Projects\\\\RustKernel/D:')) {
-        data = data.toString().replaceAll('D:\\\\Developement\\\\Projects\\\\RustKernel/D:', 'D:');
+    if (data.includes('/C:')) {
+        data = data.toString().replaceAll(/C:(\\\\[^\\]*)+\/D:/gm, 'C:');
     }
     fs.appendFileSync('dbg.log', `stdout: ${data}`)
     process.stdout.write(data)

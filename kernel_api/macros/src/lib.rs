@@ -1,4 +1,4 @@
-use std::{iter::FromIterator, str::FromStr};
+use std::{fmt::format, iter::FromIterator, str::FromStr};
 
 use proc_macro::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 
@@ -99,7 +99,7 @@ pub fn wchar(tokens: TokenStream) -> TokenStream {
                 let rstr = chars.as_str();
 
                 let estr = unescape::unescape(rstr).unwrap();
-                
+
                 let mut dstr = String::from("&[");
                 for s in estr.chars() {
                     let mut b = [0; 2];
@@ -115,3 +115,22 @@ pub fn wchar(tokens: TokenStream) -> TokenStream {
         None => TokenStream::new(),
     }
 }
+
+// #[proc_macro]
+// pub fn byte_size(tokens: TokenStream) -> TokenStream {
+//     let mut iter = tokens.into_iter();
+//     let s = iter.next();
+
+//     match s {
+//         Some(s) => match s {
+//             TokenTree::Literal(l) => {
+//                 let rstr = l.to_string();
+//                 let st = format!("({}) * 1024", rstr);
+
+//                 return TokenStream::from_str(&st).unwrap();
+//             }
+//             _ => panic!("Expected expression!"),
+//         },
+//         None => panic!("Expected expression!"),
+//     }
+// }

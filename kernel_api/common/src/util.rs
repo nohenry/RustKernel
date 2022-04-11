@@ -159,7 +159,6 @@ pub unsafe fn in32(port: u16) -> u32 {
     ret
 }
 
-
 #[derive(Debug, Default)]
 pub struct CpuState {
     rax: u64,
@@ -174,4 +173,54 @@ pub struct CpuState {
     rip: u64,
 
     flags: u64,
+}
+
+// macro_rules! byte_size {
+//     // ($e:expr(KB)) => {
+//     //     ($e) * 1024
+//     // };
+//     ($e:expr MB) => {
+//         ($e) * 1024 * 1024
+//     };
+//     // (($e:expr)GB) => {
+//     //     ($e) * 1024  * 1024 * 1024
+//     // };
+//     // (($e:expr)TB) => {
+//     //     ($e) * 1024 * 1024  * 1024 * 1024
+//     // };
+// }
+
+#[macro_export]
+macro_rules! size_kb {
+    ($e:expr) => {
+        (($e) * 1024)
+    };
+}
+
+#[macro_export]
+macro_rules! size_mb {
+    ($e:expr) => {
+        (($e) * 1024 * 1024)
+    };
+}
+
+#[macro_export]
+macro_rules! size_gb {
+    ($e:expr) => {
+        (($e) * 1024 * 1024 * 1024)
+    };
+}
+
+#[macro_export]
+macro_rules! size_tb {
+    ($e:expr) => {
+        (($e) * 1024 * 1024 * 1024 * 1024)
+    };
+}
+
+#[macro_export]
+macro_rules! size_pb {
+    ($e:expr) => {
+        (($e) * 1024 * 1024 * 1024 * 1024 * 1024)
+    };
 }

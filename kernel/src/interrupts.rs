@@ -14,10 +14,10 @@ use crate::{
     },
     drivers::keyboard::Keyboard,
     gdt,
-    processes::{SYSCALL_SP, SYSCALL_UMAP, SYSCALL_USP},
 };
 
 use common::util;
+use common::process::{self, SYSCALL_SP, SYSCALL_UMAP, SYSCALL_USP};
 use common::x86_64::{
     registers::model_specific::Msr,
     structures::idt::{self, InterruptDescriptorTable},
@@ -284,11 +284,11 @@ extern "x86-interrupt" fn keyboard_handler(_stack_frame: idt::InterruptStackFram
     interrupt_begin!();
     unsafe {
         asm!("mov rdx, rsp", options(nostack));
-        asm!("mov rsp, {}", in(reg) crate::processes::SYSCALL_SP, options(nostack));
+        asm!("mov rsp, {}", in(reg) process::SYSCALL_SP, options(nostack));
 
         asm!("mov rsi, cr3", options(nostack));
         // asm!("mov cr3, {}", in(reg) crate::mem::KERNEL_MAP, options(nostack));
-        asm!("mov {}, rdx", out(reg) crate::processes::SYSCALL_USP, options(nostack));
+        asm!("mov {}, rdx", out(reg) process::SYSCALL_USP, options(nostack));
 
         asm!("push rsi", options(nostack));
 
@@ -298,7 +298,7 @@ extern "x86-interrupt" fn keyboard_handler(_stack_frame: idt::InterruptStackFram
 
         asm!("pop rsi", options(nostack));
         asm!("mov cr3, rsi", options(nostack));
-        asm!("mov rsp, {}", in(reg) crate::processes::SYSCALL_USP, options(nostack));
+        asm!("mov rsp, {}", in(reg) process::SYSCALL_USP, options(nostack));
 
         // PICS.lock()
         //     .notify_end_of_interrupt(InterruptIndex::Timer.as_u9());

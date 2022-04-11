@@ -14,7 +14,8 @@ extern crate alloc;
 mod acpi;
 mod drivers;
 mod interrupts;
-mod processes;
+mod syscall;
+mod process_manager;
 
 use core::arch::asm;
 use core::panic::PanicInfo;
@@ -27,10 +28,9 @@ use common::x86_64::structures::paging::{
     Translate,
 };
 use common::x86_64::{PhysAddr, VirtAddr};
-use common::{allocator, efi, elf, gdt, kprintln, mem, KernelParameters};
+use common::{allocator, efi, elf, gdt, kprintln, mem, KernelParameters, process};
 
 use crate::drivers::pci;
-use crate::processes::{test_process, Process};
 use common::efi::{
     get_system_table, guid, FileHandle, FileInfo, FileProtocol, FILE_HIDDEN, FILE_MODE_READ,
     FILE_READ_ONLY, FILE_SYSTEM,
@@ -56,41 +56,15 @@ pub extern "C" fn _start(parameters: &'static mut KernelParameters) -> ! {
         unsafe { mem::init(parameters.frame_allocator.clone(), mem::PAGE_TABLE_OFFSET) };
     mem::allocator().lock().swap_map(parameters.memory_map);
 
-    let table: *mut PageTable = mapper.level_4_table();
-
-    unsafe {
-        mem::KERNEL_MAP = table as u64;
-    }
-
-    match mapper.translate_addr(VirtAddr::from_ptr(&parameters.memory_map[0])) {
-        Some(addr) => {
-            kprintln!("Mmap {:x}", addr.as_u64());
-        }
-        None => (),
-    }
-
     // unsafe {
-    //     mapper
-    //         .identity_map(
-    //             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(0x3FB7_E002)),
-    //             PageTableFlags::PRESENT,
-    //             mem::allocator().get_mut(),
-    //         )
-    //         .unwrap()
-    //         .flush();
+    //     mem::KERNEL_MAP = table as u64;
     // }
 
-    // match mapper.translate_addr(VirtAddr::from_ptr(parameters.memory_map.as_ptr())) {
-    //     Some(addr) => unsafe {
-    //         kprintln!("Memory Map: {:?}", addr);
-    //     },
-    //     None => (),
-    // }
-
-    efi::print_memory_map(parameters.memory_map);
+    // efi::print_memory_map(parameters.memory_map);
     // allocator::init_heap_new(&mut mapper, &mut frame_allocator, parameters.heap_top, false).expect("Unable to create heap!");
 
-    acpi::init();
+    // acpi::init(parameters.memory_map);
+    acpi::init(parameters.memory_map);
 
     // Setup interrupts
     interrupts::init();
@@ -109,7 +83,7 @@ pub extern "C" fn _start(parameters: &'static mut KernelParameters) -> ! {
     //     image = Some(exec_file);
     // }
 
-    processes::set_syscall_sp();
+    process::set_syscall_sp();
 
     // let new_process = Process::from_elf(&image.unwrap(),  &mut mapper, &mut frame_allocator);
 

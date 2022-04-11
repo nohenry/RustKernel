@@ -8,8 +8,9 @@ use core::{
 use spinning_top::{lock_api::MutexGuard, RawSpinlock, Spinlock};
 use x86_64::{
     structures::paging::{
-        mapper::{MapToError, MapperFlush},
-        FrameAllocator, Mapper, OffsetPageTable, PageTable, PageTableFlags, PhysFrame, Size4KiB,
+        mapper::{MapToError, MapperFlush, MapperFlushAll},
+        FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame,
+        Size4KiB,
     },
     PhysAddr, VirtAddr,
 };
@@ -54,62 +55,102 @@ pub fn init(alloc: PageTableFrameAllocator<'static>, offset: u64) -> OffsetPageT
     active_offset_page_table(offset)
 }
 
-pub fn map_phys(
-    phys: PhysAddr,
-    size: usize,
-) -> Result<MapperFlush<Size4KiB>, MapToError<Size4KiB>> {
+pub fn map_virt(phys: PhysAddr, virt: VirtAddr, size: usize) -> Result<(), MapToError<Size4KiB>> {
     let mut pt = active_offset_page_table(PAGE_TABLE_OFFSET);
-    unsafe {
-        <OffsetPageTable as Mapper<Size4KiB>>::identity_map(
-            &mut pt,
-            PhysFrame::<Size4KiB>::containing_address(phys),
-            PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
-            allocator().get_mut(),
-        )
+    let start = PhysFrame::containing_address(phys);
+    let end = PhysFrame::containing_address(phys + size);
+
+    let pg_start = Page::containing_address(virt);
+    let pg_end = Page::containing_address(virt + size);
+
+    for (frame, page) in PhysFrame::<Size4KiB>::range_inclusive(start, end)
+        .zip(Page::<Size4KiB>::range_inclusive(pg_start, pg_end))
+    {
+        match unsafe {
+            <OffsetPageTable as Mapper<Size4KiB>>::map_to(
+                &mut pt,
+                page,
+                frame,
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                allocator().get_mut(),
+            )
+        } {
+            Ok(o) => o.flush(),
+            Err(e) => return Err(e),
+        }
     }
+    Ok(())
+}
+
+pub fn map_phys(phys: PhysAddr, size: usize) -> Result<(), MapToError<Size4KiB>> {
+    let mut pt = active_offset_page_table(PAGE_TABLE_OFFSET);
+    let start = PhysFrame::containing_address(phys);
+    let end = PhysFrame::containing_address(phys + size);
+    for frame in PhysFrame::<Size4KiB>::range_inclusive(start, end) {
+        match unsafe {
+            <OffsetPageTable as Mapper<Size4KiB>>::identity_map(
+                &mut pt,
+                frame,
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                allocator().get_mut(),
+            )
+        } {
+            Ok(o) => o.flush(),
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 pub fn map_phys_table(
     pgtbl: &mut OffsetPageTable<'_>,
     phys: PhysAddr,
     size: usize,
-) -> Result<MapperFlush<Size4KiB>, MapToError<Size4KiB>> {
+) -> Result<(), MapToError<Size4KiB>> {
     kprintln!("Mapping {:x}", phys.as_u64());
-    unsafe {
-        pgtbl.identity_map(
-            PhysFrame::<Size4KiB>::containing_address(phys),
-            PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
-            allocator().get_mut(),
-        )
+    let start = PhysFrame::containing_address(phys);
+    let end = PhysFrame::containing_address(phys + size);
+    for frame in PhysFrame::<Size4KiB>::range_inclusive(start, end) {
+        match unsafe {
+            pgtbl.identity_map(
+                PhysFrame::<Size4KiB>::containing_address(phys),
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                allocator().get_mut(),
+            )
+        } {
+            Ok(o) => o.flush(),
+            Err(e) => return Err(e),
+        }
     }
+    Ok(())
 }
 
 // pub fn map_ptr<T: ?Sized>(ptr: *const T) -> Result<MapperFlush<Size4KiB>, MapToError<Size4KiB>> {
 //     map_phys(PhysAddr::new(ptr as u64), size_of::<T>())
 // }
 
-pub fn map_ref<T: ?Sized>(ptr: &T) -> Result<MapperFlush<Size4KiB>, MapToError<Size4KiB>> {
+pub fn map_ref<T: ?Sized>(ptr: &T) -> Result<(), MapToError<Size4KiB>> {
     map_phys(
         PhysAddr::new(ptr as *const T as *const () as u64),
         size_of_val(ptr),
     )
 }
 
-pub fn map_ref_len<T: ?Sized>(ptr: &T, size: usize) -> Result<MapperFlush<Size4KiB>, MapToError<Size4KiB>> {
+pub fn map_ref_len<T: ?Sized>(ptr: &T, size: usize) -> Result<(), MapToError<Size4KiB>> {
     map_phys(
         PhysAddr::new(ptr as *const T as *const () as u64),
         size_of_val(ptr) * size,
     )
 }
 
-pub fn map_arr<T>(ptr: &[T]) -> Result<MapperFlush<Size4KiB>, MapToError<Size4KiB>> {
+pub fn map_arr<T>(ptr: &[T]) -> Result<(), MapToError<Size4KiB>> {
     map_phys(
         PhysAddr::new(&ptr[0] as *const T as u64),
         size_of::<T>() * ptr.len(),
     )
 }
 
-pub fn map_arr_len<T>(ptr: &[T], len: usize) -> Result<MapperFlush<Size4KiB>, MapToError<Size4KiB>> {
+pub fn map_arr_len<T>(ptr: &[T], len: usize) -> Result<(), MapToError<Size4KiB>> {
     map_phys(
         PhysAddr::new(&ptr[0] as *const T as u64),
         size_of::<T>() * len,
@@ -119,14 +160,14 @@ pub fn map_arr_len<T>(ptr: &[T], len: usize) -> Result<MapperFlush<Size4KiB>, Ma
 pub fn map_ptr_table<T>(
     pgtbl: &mut OffsetPageTable<'_>,
     ptr: &T,
-) -> Result<MapperFlush<Size4KiB>, MapToError<Size4KiB>> {
+) -> Result<(), MapToError<Size4KiB>> {
     map_phys_table(pgtbl, PhysAddr::new(ptr as *const T as u64), size_of::<T>())
 }
 
 pub fn map_arr_table<T>(
     pgtbl: &mut OffsetPageTable<'_>,
     ptr: &[T],
-) -> Result<MapperFlush<Size4KiB>, MapToError<Size4KiB>> {
+) -> Result<(), MapToError<Size4KiB>> {
     map_phys_table(
         pgtbl,
         PhysAddr::new(&ptr[0] as *const T as u64),
