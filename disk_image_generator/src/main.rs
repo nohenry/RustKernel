@@ -11,16 +11,18 @@ use iso::option::{ElToritoOpt, Opt};
 
 mod iso;
 
-const IN_FILES: &[&str] =
-    &["D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-uefi\\debug\\kernel_loader.efi", "D:\\Developement\\Projects\\RustKernel\\boot_image_generator\\boot_image.bin"];
-
-const OUT_FILES: &[&str] = &["efi/boot/bootx64.efi", "efi/boot/btimg.bin"];
+const IN_FILES: &[&str] = &[
+    "D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-uefi\\debug\\kernel_loader.efi",
+];
+// "D:\\Developement\\Projects\\RustKernel\\boot_image_generator\\boot_image.bin"
+// "efi/boot/btimg.bin"
+const OUT_FILES: &[&str] = &["efi/boot/bootx64.efi"];
 
 fn main() -> io::Result<()> {
     env_logger::init();
 
     let img_file_path =
-        PathBuf::from_str("misc/kernel.img").expect("Unable to create image file path!");
+        PathBuf::from_str("misc/boot/kernel.img").expect("Unable to create image file path!");
     let out_file =
         PathBuf::from_str("misc/kernel.iso").expect("Unable to create output file path!");
 

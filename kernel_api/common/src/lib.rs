@@ -1,6 +1,7 @@
 #![no_std]
 #![feature(crate_visibility_modifier)]
 #![feature(alloc_error_handler)]
+#![feature(abi_efiapi)]
 
 pub mod efi;
 pub mod elf;
@@ -11,6 +12,7 @@ pub mod gdt;
 pub mod mem;
 pub mod allocator;
 pub mod process;
+pub mod memory_regions;
 mod linked_list_allocator;
 
 use core::fmt::Debug;

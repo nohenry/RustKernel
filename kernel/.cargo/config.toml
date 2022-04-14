@@ -1,5 +1,6 @@
 [build]
 target = "kernel_target.json"
+rustflags = ["-C", "link-arg=-Tkernel/link.x"]
 
 [unstable]
 build-std = ["core", "alloc"]

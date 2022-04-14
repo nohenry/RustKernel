@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 use x86_64::{
     structures::paging::{
         page::PageRangeInclusive, FrameAllocator, Mapper, OffsetPageTable, Page, PageTable,
-        PageTableFlags, PhysFrame, Size1GiB, Size2MiB, Size4KiB,
+        PageTableFlags, PhysFrame, Size1GiB, Size2MiB, Size4KiB, mapper::MapToError,
     },
     PhysAddr, VirtAddr,
 };
@@ -12,10 +12,9 @@ use x86_64::{
 use crate::{
     efi,
     elf::{self, SegmentType},
-    mem,
+    mem, memory_regions::{self, PROCESS_STACK_ADDRESS},
 };
 
-const PROCESS_STACK_ADDRESS: usize = 0x844_4444_0000;
 
 pub static mut SYSCALL_SP: u64 = 0x0;
 pub static mut SYSCALL_USP: u64 = 0x0;
@@ -24,7 +23,6 @@ pub static mut SYSCALL_UMAP: u64 = 0x0;
 #[inline(always)]
 pub fn set_syscall_sp() {
     unsafe { asm!("mov {}, rsp", out(reg) SYSCALL_SP) }
-
 }
 
 pub type ProcessId = u32;
@@ -68,7 +66,7 @@ impl Process {
             for frame in phys_frames {
                 kprintln!("Frame {:x?}", frame);
                 let page = Page::containing_address(
-                    VirtAddr::new(mem::PAGE_TABLE_OFFSET) + frame.start_address().as_u64(),
+                    VirtAddr::new(memory_regions::PAGE_TABLE_OFFSET) + frame.start_address().as_u64(),
                 );
                 mapper
                     .map_to(
@@ -220,10 +218,8 @@ impl Process {
                                         | PageTableFlags::USER_ACCESSIBLE
                                         | PageTableFlags::PRESENT,
                                     frame_allocator,
-                                )
+                                );
                             }
-                            .expect("Unable to map elf segment!")
-                            .flush();
 
                             if file_size > 4096 {
                                 file_size -= 4096;
@@ -248,8 +244,7 @@ impl Process {
 
     pub fn from_elf(
         elf: &elf::ElfFile<'_>,
-        kernel_code_start: u64,
-        kernel_code_end: u64,
+        kernel: &elf::ElfFile<'_>,
         kernel_stack_start: u64,
         kernel_stack_end: u64,
         mem: usize,
@@ -257,7 +252,10 @@ impl Process {
         frame_allocator: &mut impl FrameAllocator<Size4KiB>,
     ) -> Process {
         let mut new_page_table = Box::new(PageTable::new());
+        #[cfg(feature = "bootloader")]
         let mut mapper = unsafe { OffsetPageTable::new(&mut new_page_table, VirtAddr::new(0)) };
+        #[cfg(feature = "kernel")]
+        let mut mapper = unsafe { OffsetPageTable::new(&mut new_page_table, VirtAddr::new(memory_regions::PAGE_TABLE_OFFSET)) };
 
         let phys_mem_start = PhysFrame::containing_address(PhysAddr::zero());
         let phys_mem_end = PhysFrame::containing_address(PhysAddr::new(mem as _));
@@ -267,7 +265,7 @@ impl Process {
             for frame in phys_frames {
                 kprintln!("Frame {:x?}", frame);
                 let page = Page::containing_address(
-                    VirtAddr::new(mem::PAGE_TABLE_OFFSET) + frame.start_address().as_u64(),
+                    VirtAddr::new(memory_regions::PAGE_TABLE_OFFSET) + frame.start_address().as_u64(),
                 );
                 mapper
                     .map_to(
@@ -300,12 +298,12 @@ impl Process {
         }
 
         /* Map kernel crap for syscalls and interrupts */
-        let kernel_code_start =
-            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_code_start));
-        let kernel_code_end =
-            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_code_end));
-        let kernel_code_frames =
-            PhysFrame::<Size4KiB>::range_inclusive(kernel_code_start, kernel_code_end);
+        // let kernel_code_start =
+        //     PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_code_start));
+        // let kernel_code_end =
+        //     PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_code_end));
+        // let kernel_code_frames =
+        //     PhysFrame::<Size4KiB>::range_inclusive(kernel_code_start, kernel_code_end);
 
         let kernel_stack_end =
             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_stack_end));
@@ -315,18 +313,18 @@ impl Process {
             PhysFrame::<Size4KiB>::range_inclusive(kernel_stack_end, kernel_stack_start);
 
         unsafe {
-            for frame in kernel_code_frames {
-                mapper
-                    .identity_map(
-                        frame,
-                        // For now the test process is in kernel code so user accessable flag is set
-                        PageTableFlags::USER_ACCESSIBLE
-                            | PageTableFlags::PRESENT
-                            | PageTableFlags::WRITABLE,
-                        frame_allocator,
-                    )
-                    .expect("Unable to identity map!");
-            }
+            // for frame in kernel_code_frames {
+            //     mapper
+            //         .identity_map(
+            //             frame,
+            //             // For now the test process is in kernel code so user accessable flag is set
+            //             PageTableFlags::USER_ACCESSIBLE
+            //                 | PageTableFlags::PRESENT
+            //                 | PageTableFlags::WRITABLE,
+            //             frame_allocator,
+            //         )
+            //         .expect("Unable to identity map!");
+            // }
 
             for frame in kernel_stack_frames {
                 mapper
@@ -348,6 +346,43 @@ impl Process {
             //         frame_allocator,
             //     )
             //     .expect("Unable to map apic regs for process!");
+        }
+
+        // Map kernel data
+        let header = kernel.header();
+        for pheader in kernel.progam_headers() {
+            match pheader.segement_type {
+                SegmentType::Load => {
+                    // Pages of segment virtual address
+                    let pg_start = Page::<Size4KiB>::containing_address(VirtAddr::new(
+                        pheader.virtual_address,
+                    ));
+                    let pg_end = Page::<Size4KiB>::containing_address(VirtAddr::new(
+                        pheader.virtual_address + pheader.segment_mem_size,
+                    ));
+
+                    let pages = Page::<Size4KiB>::range_inclusive(pg_start, pg_end);
+
+                    /* Map virtual pages, allocate physical frames and copy the segment data
+                     * from elf file to those frames */
+                    for page in pages {
+                        match current_mapper.translate_page(page) {
+                            Ok(frame) => unsafe {
+                                mapper
+                                    .map_to(
+                                        page,
+                                        frame,
+                                        PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                                        frame_allocator,
+                                    )
+                                    .unwrap();
+                            },
+                            Err(_) => panic!("Unable to map kernel pages!"),
+                        }
+                    }
+                }
+                _ => (),
+            }
         }
 
         let header = elf.header();
@@ -402,7 +437,7 @@ impl Process {
                             );
 
                             /* Map frames in processes new address space*/
-                            unsafe {
+                            match unsafe {
                                 mapper.map_to(
                                     page,
                                     frame,
@@ -411,9 +446,11 @@ impl Process {
                                         | PageTableFlags::PRESENT,
                                     frame_allocator,
                                 )
+                            } {
+                                Ok(_) => (),
+                                Err(MapToError::PageAlreadyMapped(frame)) => kprintln!("Frame already mapped {:x}", frame.start_address().as_u64()),
+                                Err(e) => panic!("Unable to map frame! {:?}", e)
                             }
-                            .expect("Unable to map elf segment!")
-                            .flush();
 
                             if file_size > 4096 {
                                 file_size -= 4096;

@@ -12,3 +12,7 @@ lazy_static = {version = "1.4.0", features=["spin_no_std"]}
 linked_list_allocator = {path = "../../../../Libraries/linked-list-allocator"}
 spinning_top = {path = "../../../../Libraries/spinning_top"}
 boot_image_generator = { path = "../../boot_image_generator" }
+
+[features]
+kernel = []
+bootloader = []

@@ -9,16 +9,15 @@ use spinning_top::{lock_api::MutexGuard, RawSpinlock, Spinlock};
 use x86_64::{
     structures::paging::{
         mapper::{MapToError, MapperFlush, MapperFlushAll},
-        FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame,
-        Size4KiB,
+        FrameAllocator, Mapper, OffsetPageTable, Page, PageSize, PageTable, PageTableFlags,
+        PhysFrame, Size4KiB,
     },
     PhysAddr, VirtAddr,
 };
 
-use crate::efi::{self, MemoryDescriptor};
+use crate::{efi::{self, MemoryDescriptor}, memory_regions::PAGE_TABLE_OFFSET};
 
 pub const STACK_SIZE: usize = 4096 * 5;
-pub const PAGE_TABLE_OFFSET: u64 = 0xA00_0000_0000; // 10 TB
 
 pub static mut KERNEL_MAP: u64 = 0x0;
 
@@ -55,7 +54,14 @@ pub fn init(alloc: PageTableFrameAllocator<'static>, offset: u64) -> OffsetPageT
     active_offset_page_table(offset)
 }
 
-pub fn map_virt(phys: PhysAddr, virt: VirtAddr, size: usize) -> Result<(), MapToError<Size4KiB>> {
+pub fn map_virt<'a, S>(
+    phys: PhysAddr,
+    virt: VirtAddr,
+    size: usize,
+) -> Result<(), MapToError<S>>
+where
+    S: PageSize, OffsetPageTable<'a>: Mapper<S>
+{
     let mut pt = active_offset_page_table(PAGE_TABLE_OFFSET);
     let start = PhysFrame::containing_address(phys);
     let end = PhysFrame::containing_address(phys + size);
@@ -63,11 +69,11 @@ pub fn map_virt(phys: PhysAddr, virt: VirtAddr, size: usize) -> Result<(), MapTo
     let pg_start = Page::containing_address(virt);
     let pg_end = Page::containing_address(virt + size);
 
-    for (frame, page) in PhysFrame::<Size4KiB>::range_inclusive(start, end)
-        .zip(Page::<Size4KiB>::range_inclusive(pg_start, pg_end))
+    for (frame, page) in PhysFrame::<S>::range_inclusive(start, end)
+        .zip(Page::<S>::range_inclusive(pg_start, pg_end))
     {
         match unsafe {
-            <OffsetPageTable as Mapper<Size4KiB>>::map_to(
+            <OffsetPageTable as Mapper<S>>::map_to(
                 &mut pt,
                 page,
                 frame,
@@ -193,14 +199,20 @@ pub struct PageTableFrameAllocator<'a> {
 
 impl<'a> PageTableFrameAllocator<'a> {
     pub fn swap_map(&mut self, memory_map: efi::MemoryMap<'a>) {
+        let curr_frame = self.allocate_frame();
+        kprintln!("Frame {:?}", curr_frame);
         let iter = memory_map.iter();
         let usable: Filter<Iter<MemoryDescriptor>, fn(&&MemoryDescriptor) -> bool> =
             iter.filter(|d| d.memory_type.is_usable());
 
-        let address_range: Map<
+        let mut address_range: Map<
             Filter<Iter<MemoryDescriptor>, fn(&&MemoryDescriptor) -> bool>,
             fn(&MemoryDescriptor) -> Range<usize>,
         > = usable.map(|u| u.physical_address..(u.physical_address + u.size * 4096));
+        // address_range.(|f| {f.start < curr_frame.unwrap().start_address().as_u64() as usize});
+        while address_range.next().unwrap().start
+            < curr_frame.unwrap().start_address().as_u64() as usize
+        {}
         let addresses: FlatMap<
             Map<
                 Filter<Iter<MemoryDescriptor>, fn(&&MemoryDescriptor) -> bool>,

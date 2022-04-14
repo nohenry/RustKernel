@@ -26,7 +26,7 @@ gdb.stdout.on('data', (data) => {
         data = data.toString().replaceAll(/D:(\\\\[^\\]*)+\/D:/gm, 'D:');
     }
     if (data.includes('/C:')) {
-        data = data.toString().replaceAll(/C:(\\\\[^\\]*)+\/D:/gm, 'C:');
+        data = data.toString().replaceAll(/D:(\\\\[^\\]*)+\/C:/gm, 'C:');
     }
     fs.appendFileSync('dbg.log', `stdout: ${data}`)
     process.stdout.write(data)

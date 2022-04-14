@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use bit_field::BitField;
 use common::{
     kprint, kprintln,
@@ -5,6 +6,7 @@ use common::{
     x86_64::PhysAddr,
 };
 use core::{arch::asm, borrow::Borrow};
+use macros::{generate_isrs, set_isrs};
 
 use crate::{
     acpi::{
@@ -16,8 +18,8 @@ use crate::{
     gdt,
 };
 
-use common::util;
 use common::process::{self, SYSCALL_SP, SYSCALL_UMAP, SYSCALL_USP};
+use common::util;
 use common::x86_64::{
     registers::model_specific::Msr,
     structures::idt::{self, InterruptDescriptorTable},
@@ -28,11 +30,10 @@ const IA32_APIC_BASE: u32 = 0x1b;
 
 use spin;
 
-pub const PIC_1_OFFSET: u8 = 32;
-pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
-
 pub static APIC: spin::Mutex<LocalApic> = spin::Mutex::new(LocalApic::new());
 pub static IOAPIC: spin::Mutex<IOApic> = spin::Mutex::new(IOApic::new());
+static mut HANDLERS: [Vec<fn(&mut InterruptStackFrame, &CpuSnapshot)>; 256 - 32] =
+    [const { Vec::new() }; 256 - 32];
 
 #[repr(C)]
 pub struct CpuSnapshot {
@@ -55,6 +56,8 @@ pub struct CpuSnapshot {
     pub rcx: u64,
     pub rdx: u64,
 }
+
+pub use idt::InterruptStackFrame;
 
 #[macro_export]
 macro_rules! interrupt_begin {
@@ -83,15 +86,6 @@ macro_rules! interrupt_begin {
         push rbp
         ",
     );
-
-    // if crate::processes::SYSCALL_SP != 0 {
-    //     asm!("mov rdx, rsp", options(nostack));
-    //     asm!("mov rsp, {}", in(reg) crate::processes::SYSCALL_SP, options(nostack));
-    //     asm!("mov rsi, cr3", options(nostack));
-    //     asm!("mov cr3, {}", in(reg) crate::mem::KERNEL_MAP, options(nostack));
-    //     asm!("mov {}, rdx ; push rsi", out(reg) crate::processes::SYSCALL_USP, options(nostack));
-    // }
-
 }
     };
 }
@@ -100,11 +94,6 @@ macro_rules! interrupt_begin {
 macro_rules! interrupt_end {
     () => {
         unsafe {
-            //     if crate::processes::SYSCALL_USP != 0 {
-            //     asm!("pop rsi ; mov cr3, rsi", options(nostack));
-            //     asm!("mov rsp, {}", in(reg) crate::processes::SYSCALL_USP, options(nostack));
-            // }
-
             asm!(
                 "
         pop rbp
@@ -132,11 +121,6 @@ macro_rules! interrupt_end {
     };
     (sti) => {
         unsafe {
-            //     if crate::processes::SYSCALL_USP != 0 {
-            //     asm!("pop rsi ; mov cr3, rsi", options(nostack));
-            //     asm!("mov rsp, {}", in(reg) crate::processes::SYSCALL_USP, options(nostack));
-            // }
-
             asm!(
                 "
         pop rbp
@@ -166,28 +150,7 @@ macro_rules! interrupt_end {
     };
 }
 
-#[derive(Debug, Clone, Copy)]
-#[repr(u8)]
-pub enum InterruptIndex {
-    Timer = PIC_1_OFFSET,
-    Keyboard,
-    Cascade,
-    SerialPort1,
-    SerialPort2,
-    ParallelPort1,
-    FloppyDisk,
-    ParallelPort2,
-}
-
-impl InterruptIndex {
-    fn as_u8(self) -> u8 {
-        self as u8
-    }
-
-    fn as_usize(self) -> usize {
-        usize::from(self.as_u8())
-    }
-}
+generate_isrs!();
 
 lazy_static! {
     pub static ref IDT: InterruptDescriptorTable = {
@@ -208,20 +171,9 @@ lazy_static! {
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
         }
 
-        unsafe {
-            idt[InterruptIndex::Timer.as_usize()]
-                .set_handler_fn(timer_handler_stub)
-                .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
-            idt[InterruptIndex::Keyboard.as_usize()]
-                .set_handler_fn(keyboard_handler)
-                .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
-        }
-        idt[InterruptIndex::SerialPort2.as_usize()].set_handler_fn(serial1_handler);
-        idt[InterruptIndex::SerialPort1.as_usize()].set_handler_fn(serial1_handler);
-
         /* APIC Stuff */
         unsafe {
-            idt[60].set_handler_fn(lapic_timer).set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
+            set_isrs!(idt);
             idt[0xFF].set_handler_fn(lapic_spurious);
         }
         idt
@@ -240,70 +192,20 @@ pub fn init() {
         out8(0x21, 0xFF);
         out8(0xA1, 0xFF);
     }
-
-    //x86_64::instructions::interrupts::enable();
 }
 
-extern "x86-interrupt" fn timer_handler_stub(stack_frame: idt::InterruptStackFrame) {
-    // x86_64::instructions::hlt();
-    interrupt_begin!();
+pub fn register_handler(vector: u8, handler: fn(&mut InterruptStackFrame, &CpuSnapshot)) {
     unsafe {
-        asm!("mov rdx, rsp", options(nomem, nostack)); // Save old stack
-        asm!("mov rsp, rax; mov rbp, rsp", in("rax") SYSCALL_SP, options(nostack)); // Load kernel stack
-        asm!("", out("rdx") SYSCALL_USP, options(nostack)); // Save old stack into variable for later
-                                                            // asm!("", out("rdx") cpu, options(nostack)); // Load address into pointer for cpu snapshot
-
-        asm!("mov rax, cr3", out("rax") SYSCALL_UMAP, options(nostack)); // Save old address space
-
-        timer_handler();
-
-        asm!("mov cr3, rax", in("rax") SYSCALL_UMAP, options(nostack));
-        asm!("mov rsp, rax", in("rax") SYSCALL_USP, options(nostack));
-
-        // PICS.lock()
-        //     .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
-        // PICS.force_unlock();
-    }
-    interrupt_end!(sti);
-}
-
-fn timer_handler() {}
-
-extern "x86-interrupt" fn serial1_handler(_stack_frame: idt::InterruptStackFrame) {
-    kprintln!("Serial\n");
-    unsafe {
-        util::in8(0x3F8);
-    }
-    unsafe {
-        // PICS.lock()
-        //     .notify_end_of_interrupt(InterruptIndex::SerialPort2.as_u8());
+        HANDLERS[vector as usize - 32].push(handler);
     }
 }
 
-extern "x86-interrupt" fn keyboard_handler(_stack_frame: idt::InterruptStackFrame) {
-    interrupt_begin!();
+fn interrupt(stack_frame: &mut idt::InterruptStackFrame, snapshot: &CpuSnapshot, vector: u8) {
     unsafe {
-        asm!("mov rdx, rsp", options(nostack));
-        asm!("mov rsp, {}", in(reg) process::SYSCALL_SP, options(nostack));
-
-        asm!("mov rsi, cr3", options(nostack));
-        // asm!("mov cr3, {}", in(reg) crate::mem::KERNEL_MAP, options(nostack));
-        asm!("mov {}, rdx", out(reg) process::SYSCALL_USP, options(nostack));
-
-        asm!("push rsi", options(nostack));
-
-        let b = in8(0x60);
-        let chr = Keyboard::code_to_char(b);
-        kprint!("{}", chr);
-
-        asm!("pop rsi", options(nostack));
-        asm!("mov cr3, rsi", options(nostack));
-        asm!("mov rsp, {}", in(reg) process::SYSCALL_USP, options(nostack));
-
-        // PICS.lock()
-        //     .notify_end_of_interrupt(InterruptIndex::Timer.as_u9());
+        for handler in &HANDLERS[vector as usize - 32] {
+            (handler)(stack_frame, snapshot);
+        }
     }
-    interrupt_end!();
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: idt::InterruptStackFrame) {
@@ -350,11 +252,6 @@ extern "x86-interrupt" fn pagefault_handler(
     kprintln!("Address: {:?}\n", Cr2::read());
 
     loop {}
-}
-
-extern "x86-interrupt" fn lapic_timer(_stack_frame: idt::InterruptStackFrame) {
-    // kprint!(".");
-    APIC.lock().send_eoi();
 }
 
 extern "x86-interrupt" fn lapic_spurious(_stack_frame: idt::InterruptStackFrame) {

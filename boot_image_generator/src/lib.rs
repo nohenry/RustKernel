@@ -69,7 +69,7 @@ impl BootImageFS<'_> {
         &self.data[0] as *const u8 as _ 
     }
 
-    pub fn size(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.data.len()
     }
 }

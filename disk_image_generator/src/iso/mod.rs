@@ -371,7 +371,7 @@ pub fn create_iso(opt: &mut option::Opt) -> std::io::Result<()> {
     tree.write_extent(&mut out_file, None)?;
     tree.write_files(&mut out_file)?;
     let old = out_file.seek(SeekFrom::End(0))?;
-    for _ in 0..8 {
+    for _ in 0..128 {
         out_file.write_all(&empty_mki_section)?;
     }
     out_file.seek(SeekFrom::Start(old))?;

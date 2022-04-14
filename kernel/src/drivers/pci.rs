@@ -5,7 +5,7 @@ use aml::{
     AmlName,
 };
 use bit_field::BitField;
-use common::{kprintln, size_tb, x86_64::{PhysAddr, VirtAddr}};
+use common::{kprintln, size_tb, x86_64::{PhysAddr, VirtAddr, structures::paging::Size4KiB}};
 
 use crate::{
     acpi::{aml::GLOBAL_AML, get_xsdt, mcfg::MCFG, Signature},
@@ -431,7 +431,7 @@ impl<'a> PCI<'a> {
         let seg = &self.mcfg.unwrap()[segment];
         let address: *const u64 = self.form_address(seg.address, bus - seg.bus_start, device, function, 0);
         let address = address as u64;
-        common::mem::map_virt(PhysAddr::new(seg.address as u64), VirtAddr::new(address), 4095);
+        common::mem::map_virt::<Size4KiB>(PhysAddr::new(seg.address as u64), VirtAddr::new(address), 4095);
     }
 }
 

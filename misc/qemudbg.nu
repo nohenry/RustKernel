@@ -6,7 +6,7 @@ pathvar add "C:\Program Files\qemu"
 
 #qemu-system-x86_64 -d trace:help
 
-qemu-system-x86_64 -machine q35 -smp 2 -no-reboot -s -S -D misc/qemu.log -d int -m 1024M -serial stdio -bios ./misc/ovmf-x64/OVMF_CODE-pure-efi.fd  -drive file=misc/kernel.iso,index=1,media=cdrom -drive file=misc/ovmf-x64/UefiShell.iso,index=2,media=cdrom
+qemu-system-x86_64 -machine q35 -smp 2 -no-reboot -s -S -D misc/qemu.log -d int -m 1024M -serial stdio -bios ./misc/ovmf-x64/OVMF_CODE-pure-efi.fd  -drive file=misc/kernel1.iso,index=1,media=cdrom -drive file=misc/ovmf-x64/UefiShell.iso,index=2,media=cdrom
 
 #qemu-system-x86_64 -machine q35 -smp 2 -no-reboot -s -D misc/qemu.log -d int -m 1024M -monitor stdio -bios ./misc/ovmf-x64/OVMF_CODE-pure-efi.fd  -drive file=misc/kernel.iso,index=1,media=cdrom -drive file=misc/ovmf-x64/UefiShell.iso,index=2,media=cdrom
 

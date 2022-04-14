@@ -9,4 +9,4 @@ edition = "2021"
 
 macros = {path="../kernel_api/macros"}
 boot_image_generator = { path = "../boot_image_generator" }
-common = {path = "../kernel_api/common"}
+common = {path = "../kernel_api/common", features = ["bootloader"]}

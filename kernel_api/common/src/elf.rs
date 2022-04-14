@@ -76,7 +76,7 @@ impl Header {
 }
 
 pub struct ElfFile<'a> {
-    data: &'a [u8]
+    pub data: &'a [u8]
 }
 
 impl <'a> ElfFile<'a> {
@@ -93,7 +93,7 @@ impl <'a> ElfFile<'a> {
     pub fn progam_headers(&self) -> ProgramHeaderIterator {
         let header = self.header();
         let base = unsafe { &self.data[header.prg_header_tbl as usize] as *const u8 as *const ProgramHeader };
-        assert!(header.prg_entry_size as usize == core::mem::size_of::<ProgramHeader>(), "Sizes aren't equal {} == {}", header.prg_entry_size, core::mem::size_of::<ProgramHeader>());
+        assert!(header.prg_entry_size as usize == core::mem::size_of::<ProgramHeader>() || header.prg_entry_count == 0, "Sizes aren't equal {} == {}", header.prg_entry_size, core::mem::size_of::<ProgramHeader>());
         ProgramHeaderIterator {
             base,
             index: 0,

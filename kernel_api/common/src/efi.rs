@@ -103,8 +103,9 @@ pub struct RuntimeServices {
     /*
     Virtual Memory services
     */
-    set_virtual_address_map: fn(usize, usize, u32, *const MemoryDescriptor) -> usize,
-    convert_pointer: fn() -> usize,
+    set_virtual_address_map:
+        extern "efiapi" fn(usize, usize, u32, *const MemoryDescriptor) -> usize,
+    convert_pointer: extern "efiapi" fn() -> usize,
 }
 
 impl RuntimeServices {
@@ -131,10 +132,11 @@ pub struct BootServices {
      */
     allocate_pages: Handle,
     free_pages: Handle,
-    get_memory_map: fn(&mut usize, *mut u8, &mut usize, &mut usize, &mut u32) -> usize,
-    // fn(&mut usize, &mut [MemoryDescriptor], &mut usize, &mut usize, &mut u32) -> usize,
-    allocate_pool: fn(MemoryType, usize, *mut *mut ()) -> usize,
-    free_pool: fn(*mut ()) -> usize,
+    get_memory_map:
+        extern "efiapi" fn(&mut usize, *mut u8, &mut usize, &mut usize, &mut u32) -> usize,
+    // extern "efiapi" fn(&mut usize, &mut [MemoryDescriptor], &mut usize, &mut usize, &mut u32) -> usize,
+    allocate_pool: extern "efiapi" fn(MemoryType, usize, *mut *mut ()) -> usize,
+    free_pool: extern "efiapi" fn(*mut ()) -> usize,
 
     /*
     Event & Timer Services
@@ -152,7 +154,7 @@ pub struct BootServices {
     install_protocol_interface: Handle,
     reinstall_protocol_interface: Handle,
     uninstall_protocol_interface: Handle,
-    handle_protocol: fn(Handle, *const guid::GUID, *mut *const ()) -> usize,
+    handle_protocol: extern "efiapi" fn(Handle, *const guid::GUID, *mut *const ()) -> usize,
     reserved: usize,
     register_protocol_notify: Handle,
     locate_handle: Handle,
@@ -162,18 +164,18 @@ pub struct BootServices {
     /*
     Image services
      */
-    image_load: fn(),
+    image_load: extern "efiapi" fn(),
     start_image: Handle,
     exit: Handle,
     image_unload: Handle,
-    exit_boot_services: fn(Handle, usize) -> usize,
+    exit_boot_services: extern "efiapi" fn(Handle, usize) -> usize,
 
     /*
     Miscellaneaous Services
     */
     get_next_monotonic_count: Handle,
     stall: Handle,
-    set_watchdog_timer: Handle,
+    set_watchdog_timer: extern "efiapi" fn(usize, u64, usize, *const Char16) -> usize,
 
     /*
     Driver Support Services
@@ -181,13 +183,14 @@ pub struct BootServices {
     connect_controller: Handle,
     disconnect_controller: Handle,
 
-    open_protocol: fn(Handle, *const guid::GUID, *mut *const (), Handle, Handle, u32) -> usize,
+    open_protocol:
+        extern "efiapi" fn(Handle, *const guid::GUID, *mut *const (), Handle, Handle, u32) -> usize,
     close_protocol: Handle,
     open_protocol_info: Handle,
 
     protocols_per_handle: Handle,
     locate_handle_buffer: Handle,
-    locate_protocol: fn(*const guid::GUID, *const (), *mut *const ()) -> usize,
+    locate_protocol: extern "efiapi" fn(*const guid::GUID, *const (), *mut *const ()) -> usize,
 }
 
 const OPEN_PROTOCOL_BY_HANDLE_PROTOCOL: u32 = 0x01;
@@ -240,6 +243,10 @@ impl BootServices {
         let ptr = ptr as *mut T;
         (self.free_pool)(ptr as *mut ())
     }
+
+    pub fn set_watchdog_timer(&self, timeout: usize, watchdog_code: u64) -> usize {
+        (self.set_watchdog_timer)(timeout, watchdog_code, 0, core::ptr::null())
+    }
 }
 
 #[repr(C)]
@@ -266,20 +273,27 @@ pub struct LoadedImage {
 #[repr(C, packed)]
 pub struct FileIOInterface {
     revision: u64,
-    pub open_volume: fn(*const FileIOInterface, *mut *const FileProtocol) -> usize,
+    pub open_volume: extern "efiapi" fn(*const FileIOInterface, *mut *const FileProtocol) -> usize,
 }
 
-#[repr(C, packed)]
+#[repr(C)]
 pub struct FileProtocol {
     revision: u64,
-    pub open: fn(*const FileProtocol, *mut *const FileProtocol, *const Char16, u64, u64) -> usize,
-    pub close: fn(*const FileProtocol) -> usize,
-    pub delete: fn(*const FileProtocol) -> usize,
-    pub read: fn(*const FileProtocol, *mut usize, *mut ()) -> usize,
-    pub write: fn(*const FileProtocol) -> usize,
-    pub get_position: fn(*const FileProtocol) -> usize,
-    pub set_position: fn(*const FileProtocol, usize) -> usize,
-    pub get_info: fn(*const FileProtocol, *const guid::GUID, *mut usize, *mut ()) -> usize,
+    pub open: extern "efiapi" fn(
+        *const FileProtocol,
+        *mut *const FileProtocol,
+        *const Char16,
+        u64,
+        u64,
+    ) -> usize,
+    pub close: extern "efiapi" fn(*const FileProtocol) -> usize,
+    pub delete: extern "efiapi" fn(*const FileProtocol) -> usize,
+    pub read: extern "efiapi" fn(*const FileProtocol, *mut usize, *mut u8) -> usize,
+    pub write: extern "efiapi" fn(*const FileProtocol) -> usize,
+    pub get_position: extern "efiapi" fn(*const FileProtocol) -> usize,
+    pub set_position: extern "efiapi" fn(*const FileProtocol, usize) -> usize,
+    pub get_info:
+        extern "efiapi" fn(*const FileProtocol, *const guid::GUID, *mut usize, *mut FileInfo) -> usize,
 }
 
 #[repr(C, packed)]
@@ -293,7 +307,7 @@ pub struct Time {
     second: u8,
     pad1: u8,
     nanosecond: u32,
-    time_zone: i32,
+    time_zone: i16,
     daylight: u8,
     pad2: u8,
 }
@@ -360,32 +374,31 @@ pub fn io_volume(image_handle: Handle) -> *const FileIOInterface {
 pub fn read_fixed(file: &FileProtocol, offset: usize, size: usize, buffer: &mut [u8]) -> usize {
     let mut read = 0usize;
 
-    let status = (file.set_position)(file, offset);
+    // let status = (file.set_position)(file, offset + read);
+    // if status != 0 {
+    //     kprintln!("An error occured! {:x} SETPOSTIOIN(SFSP)", status);
+    //     return status;
+    // }
 
-    if status != 0 {
-        kprintln!("An error occured! {:x} SETPOSTIOIN(SFSP)", status);
-        return status;
-    }
+    // while read < size {
+    let mut remain = buffer.len();
 
-    while read < size {
-        let mut remain = 0x1000;
+    (file.read)(file, &mut remain, buffer.as_mut_ptr())
+    // if status != 0 {
+    //     kprintln!(
+    //         "An error occured! {:x} READ(SFSP) {} {} {:p}",
+    //         status,
+    //         remain,
+    //         read,
+    //         &mut buffer[read] as *mut _ as *mut () // buffer
+    //     );
+    //     // return status;
+    // }
 
-        let status = (file.read)(file, &mut remain, &mut buffer[read] as *mut _ as *mut ());
-        if status != 0 {
-            kprintln!(
-                "An error occured! {:x} READ(SFSP) {:x} {:x} {:p}",
-                status,
-                remain,
-                read,
-                buffer
-            );
-            return status;
-        }
+    //     read += remain;
+    // }
 
-        read += remain;
-    }
-
-    0
+    // 0
 }
 
 pub const FILE_MODE_READ: u64 = 1;
@@ -487,15 +500,15 @@ pub type MemoryMap<'a> = &'a [MemoryDescriptor];
 
 // #[repr(C)]
 // pub struct SimpleTextOutputProtocol {
-//     reset: fn(*mut Self),
-//     output_string: fn(*mut Self, *const u16),
-//     test_string: fn(&Self),
-//     query_mode: fn(&Self),
-//     set_mode: fn(&Self),
-//     set_attribute: fn(&Self),
-//     clear_screen: fn(&Self),
-//     set_cursor_position: fn(&Self),
-//     enable_cursor: fn(&Self),
+//     reset: extern "efiapi" fn(*mut Self),
+//     output_string: extern "efiapi" fn(*mut Self, *const u16),
+//     test_string: extern "efiapi" fn(&Self),
+//     query_mode: extern "efiapi" fn(&Self),
+//     set_mode: extern "efiapi" fn(&Self),
+//     set_attribute: extern "efiapi" fn(&Self),
+//     clear_screen: extern "efiapi" fn(&Self),
+//     set_cursor_position: extern "efiapi" fn(&Self),
+//     enable_cursor: extern "efiapi" fn(&Self),
 //     mode: *const u8,
 // }
 

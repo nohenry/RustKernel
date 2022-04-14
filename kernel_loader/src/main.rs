@@ -8,6 +8,7 @@
 
 extern crate alloc;
 
+use core::mem::align_of_val;
 use core::panic::PanicInfo;
 use core::{alloc::Layout, arch::asm};
 
@@ -16,8 +17,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use common::efi::{MemoryDescriptor, GLOBAL_SYSTEM_TABLE};
 use common::mem::PageTableFrameAllocator;
-use common::util;
+use common::util::{Align2MB, Align4096};
 use common::x86_64::structures::paging::page::PageRangeInclusive;
+use common::{include_bytes_align_as, kprint, util};
 use macros::wchar;
 
 use common::{
@@ -26,15 +28,15 @@ use common::{
         self, get_system_table, guid, FileHandle, FileInfo, FileProtocol, FILE_HIDDEN,
         FILE_MODE_READ, FILE_READ_ONLY, FILE_SYSTEM,
     },
-    elf, gdt,
+    elf, gdt, kprintln, mem,
     process::Process,
-    kprintln, mem, KernelParameters,
+    KernelParameters,
 };
 
 use common::x86_64::registers::control::{Cr3, Cr3Flags};
 use common::x86_64::structures::paging::{
-    FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
-    Translate,
+    FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size2MiB,
+    Size4KiB, Translate,
 };
 use common::x86_64::{PhysAddr, VirtAddr};
 
@@ -52,6 +54,9 @@ fn addr_sized<T>(a: &T, stack_top: usize, new_stack_top: usize) -> &T {
 
 static mut STACK_START: u64 = 0;
 static mut STACK_END: u64 = 0;
+
+static kernel_bytes: &'static [u8] =
+    include_bytes_align_as!(Align2MB, "../../boot_image_generator/boot_image.bin");
 
 #[no_mangle]
 extern "C" fn efi_main(image_handle: efi::Handle, system_table: *mut efi::SystemTable) {
@@ -72,67 +77,77 @@ fn run(image_handle: efi::Handle, system_table: *mut efi::SystemTable) -> ! {
 
     //let base = efi::get_image_base(image_handle);
     //kprintln!("Entry: {:x}", base);
+    || {
+        let volume = unsafe { &*efi::io_volume(image_handle) };
+        let mut fileio: *const FileProtocol = core::ptr::null();
+        let res = (volume.open_volume)(volume as _, &mut fileio);
+        if res != 0 {
+            kprintln!("An error occured! {:x} OpenVolume(SFSP)", res);
+        }
+        let fileio = unsafe { &*fileio };
+        let mut newfileio: *const FileProtocol = core::ptr::null();
 
-    let volume = unsafe { &*efi::io_volume(image_handle) };
-    let mut fileio: *const FileProtocol = core::ptr::null();
-    let res = (volume.open_volume)(volume as _, &mut fileio);
-    if res != 0 {
-        kprintln!("An error occured! {:x} OpenVolume(SFSP)", res);
-    }
-    let fileio = unsafe { &*fileio };
-    let mut newfileio: *const FileProtocol = core::ptr::null();
+        let res = (fileio.open)(
+            fileio as _,
+            &mut newfileio,
+            wchar!("efi\\boot\\btimg.bin") as *const _,
+            FILE_MODE_READ,
+            FILE_READ_ONLY,
+        );
+        if res != 0 {
+            kprintln!("An error occured! {:x} OPEN(SFSP)", res);
+        }
 
-    let res = (fileio.open)(
-        fileio as _,
-        &mut newfileio,
-        wchar!("efi\\boot\\btimg.bin") as *const _,
-        FILE_MODE_READ,
-        FILE_READ_ONLY,
-    );
-    if res != 0 {
-        kprintln!("An error occured! {:x} OPEN(SFSP)", res);
-    }
+        let mut file_info: FileInfo = unsafe { core::mem::zeroed() };
+        let buffer: *mut FileInfo = &mut file_info;
+        let mut size = core::mem::size_of::<FileInfo>();
 
-    let mut file_info: FileInfo = unsafe { core::mem::zeroed() };
-    let buffer: *mut FileInfo = &mut file_info;
-    let mut size = core::mem::size_of::<FileInfo>();
+        let res = (fileio.get_info)(newfileio, &guid::FILE_INFO, &mut size, buffer);
 
-    let res = (fileio.get_info)(
-        newfileio,
-        &guid::FILE_INFO,
-        &mut size,
-        buffer as *mut u8 as *mut (),
-    );
+        if res != 0 {
+            kprintln!("An error occured! {:x} GETINFO(SFSP)", res);
+        }
 
-    if res != 0 {
-        kprintln!("An error occured! {:x} GETINFO(SFSP)", res);
-    }
-    kprintln!("{:?} {}", file_info, size);
+        let mut file_data: *mut u8 = core::ptr::null_mut();
+        let efi_table = get_system_table();
+        let res = efi_table
+            .boot_services()
+            .allocate_pool(file_info.file_size, &mut file_data);
 
-    let mut file_data: *mut u8 = core::ptr::null_mut();
-    let efi_table = get_system_table();
-    let res = efi_table
-        .boot_services()
-        .allocate_pool(file_info.file_size + 1, &mut file_data);
+        if res != 0 {
+            kprintln!("An error occured! {:x} ALLOCATEPOOL(SFSP)", res);
+        }
 
-    if res != 0 {
-        kprintln!("An error occured! {:x} ALLOCATEPOOL(SFSP)", res);
-    }
+        let copy_file_data =
+            unsafe { core::slice::from_raw_parts_mut(file_data, file_info.file_size) };
 
-    let copy_file_data = unsafe {
-        core::slice::from_raw_parts_mut((file_data as *mut _) as *mut u8, file_info.file_size + 1)
+        let res = efi_table.boot_services().set_watchdog_timer(0, 0);
+        if res != 0 {
+            kprintln!("An error occured! {:x} Watchdog timer (SFSP)", res);
+        }
+
+        kprintln!("{:?}", file_info);
+        let res = efi::read_fixed(
+            unsafe { &*newfileio },
+            0,
+            file_info.file_size,
+            copy_file_data,
+        );
+
+        if res != 0 {
+            kprintln!("An error occured! {:x} READ (SFSP)", res);
+        }
     };
 
-    efi::read_fixed(
-        unsafe { &*newfileio },
-        0,
-        file_info.file_size,
-        copy_file_data,
-    );
+    // for i in file_data as usize..file_data as usize + file_info.file_size {
+    //     unsafe {
+    //         core::ptr::write_volatile(i as *mut u8, 0x69);
+    //     }
+    // }
 
-    if res != 0 {
-        kprintln!("An error occured! {:x} FREEPOOL(SFSP)", res);
-    }
+    // if res != 0 {
+    //     kprintln!("An error occured! {:x} FREEPOOL(SFSP)", res);
+    // }
 
     let mut copy_top = 0u64;
     unsafe {
@@ -165,15 +180,20 @@ fn run(image_handle: efi::Handle, system_table: *mut efi::SystemTable) -> ! {
 
     efi::print_memory_map(memory_map);
 
-    let layout = Layout::from_size_align(file_info.file_size, 1).unwrap();
-    kprintln!("{:?}", &layout);
-    let img_data = unsafe { alloc::alloc::alloc(layout) };
-    kprintln!("{:p}", img_data);
-    let file_data = unsafe {
-        common::util::memcpy(img_data, file_data, file_info.file_size);
-        core::slice::from_raw_parts_mut(img_data, file_info.file_size)
-    };
-    kprintln!("Here");
+    // let layout = Layout::from_size_align(kernel_bytes.len(), 1).unwrap();
+    // kprintln!("{:?}", &layout);
+    // let img_data = unsafe { alloc::alloc::alloc(layout) };
+    // kprintln!("{:p}", img_data);
+    // let file_data = unsafe {
+    //     common::util::memcpy(img_data, kernel_bytes.as_ptr(), kernel_bytes.len());
+    //     core::slice::from_raw_parts_mut(img_data, kernel_bytes.len())
+    // };
+    // kprintln!("Here");
+    // for b in &file_data[kernel_bytes.len() - 4096..kernel_bytes.len()] {
+    //     kprint!("{:02X}", b);
+    // }
+    // loop {}
+    let file_data = kernel_bytes;
 
     // let res = efi_table.boot_services().free_pool(copy_file_data);
     kprintln!("Potato");
@@ -290,49 +310,57 @@ fn run(image_handle: efi::Handle, system_table: *mut efi::SystemTable) -> ! {
 
     // mem::map_arr_table(&mut process.get_pt(), <Vec<MemoryDescriptor> as AsRef<[MemoryDescriptor]>>::as_ref(&value));
 
-    let res = efi_table
+    let res = get_system_table()
         .runtime_services()
         .set_virtual_address_map(value.as_ref(), version);
     if res != 0 {
-        kprintln!("An error occured! {:x} FREEPOOL(SFSP)", res);
+        kprintln!("An error occured! {:x} Set ADdress map(SFSP)", res);
     }
 
     // heap_top: heap_top(),
     // let heap_range = allocator::heap_range(0);
 
-    let bi_addr = boot_image.virtual_address();
+    // let bi_addr = boot_image.virtual_address();
+    // let ptr = bi_addr as *const u8;
 
-    let pt = Page::<Size4KiB>::containing_address(VirtAddr::new(bi_addr));
-    let pt_end =
-        Page::<Size4KiB>::containing_address(VirtAddr::new(bi_addr + boot_image.size() as u64));
-    let pgs = Page::<Size4KiB>::range_inclusive(pt, pt_end);
-
-    let mut frames = pgs.map(|p: Page<Size4KiB>| {
-        <OffsetPageTable as Mapper<Size4KiB>>::translate_page(&mapper, p)
-            .expect("Unable to translate bot image frame!")
-        // .translate_page(pg)
-        // .expect("Unable to translate bot image frame!")
-    });
-    // for t in frames {
-    //     kprintln!("frame {:x}", t.start_address().as_u64());
+    // kprintln!("Addr {:x}", bi_addr);
+    // for i in 0..32 {
+    //     kprint!("{:02X} ", unsafe { *ptr.offset(i) });
     // }
-    // let frames.next();
-    let first = frames.next();
-    // .expect("Unable to get first frame from boot image!");
-    // .start_address();
-    // .as_u64;();
-    let last = frames
-        .last()
-        .or(first)
-        .expect("Unable to get last frame from boot image!")
-        .start_address()
-        .as_u64();
-    let first = first
-        .expect("Unable to get first frame from boot image!")
-        .start_address()
-        .as_u64();
 
-    kprintln!("Boot range: {:x} - {:x}", first, last);
+    // let pt = Page::<Size2MiB>::containing_address(VirtAddr::new(bi_addr));
+    // let pt_end =
+    //     Page::<Size2MiB>::containing_address(VirtAddr::new(bi_addr + boot_image.len() as u64));
+    // let pgs = Page::<Size2MiB>::range_inclusive(pt, pt_end);
+
+    // let mut frames = pgs.map(|p: Page<Size2MiB>| {
+    //     let pg = <OffsetPageTable as Mapper<Size2MiB>>::translate_page(&mapper, p)
+    //         .expect("Unable to translate bot image frame!");
+    //     kprintln!("{:?} {:?}", p, pg);
+    //     pg
+    //     // .translate_page(pg)
+    //     // .expect("Unable to translate bot image frame!")
+    // });
+    // // for t in frames {
+    // //     kprintln!("frame {:x}", t.start_address().as_u64());
+    // // }
+    // // let frames.next();
+    // let first = frames.next();
+    // // .expect("Unable to get first frame from boot image!");
+    // // .start_address();
+    // // .as_u64;();
+    // let last = frames
+    //     .last()
+    //     .or(first)
+    //     .expect("Unable to get last frame from boot image!")
+    //     .start_address()
+    //     .as_u64();
+    // let first = first
+    //     .expect("Unable to get first frame from boot image!")
+    //     .start_address()
+    //     .as_u64();
+
+    // kprintln!("Boot range: {:x} - {:x}", first, last);
 
     let heap_range = allocator::heap_range(0);
     let mut process_pt = process.get_pt();
@@ -422,7 +450,7 @@ fn run(image_handle: efi::Handle, system_table: *mut efi::SystemTable) -> ! {
     let mut kernel_parameters = KernelParameters {
         memory_map: value.as_ref(),
         // boot_image: (first, last),
-        boot_image: (first, last),
+        boot_image: (boot_image.virtual_address(), boot_image.len() as _),
         frame_allocator: mem::allocator().lock().clone(),
         system_table: GLOBAL_SYSTEM_TABLE.load(core::sync::atomic::Ordering::SeqCst),
         heap: allocator::heap(),

@@ -1,6 +1,9 @@
 // use linked_list_allocator::LockedHeap;
 
-use crate::linked_list_allocator::{Heap, LockedHeap};
+use crate::{
+    linked_list_allocator::{Heap, LockedHeap},
+    memory_regions::{HEAP_SIZE, HEAP_START},
+};
 
 use x86_64::{
     structures::paging::{
@@ -9,9 +12,6 @@ use x86_64::{
     },
     VirtAddr,
 };
-
-pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 100000 * 1024;
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();

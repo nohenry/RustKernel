@@ -134,3 +134,48 @@ pub fn wchar(tokens: TokenStream) -> TokenStream {
 //         None => panic!("Expected expression!"),
 //     }
 // }
+
+#[proc_macro]
+pub fn generate_isrs(_: TokenStream) -> TokenStream {
+    let mut st = String::new();
+    for i in 0x20u8..0xFF {
+        st.push_str(format!(
+            r#"
+            extern "x86-interrupt" fn _isr_{0}(mut stack_frame: idt::InterruptStackFrame) {{
+                interrupt_begin!();
+                let mut cpu: *const CpuSnapshot = core::ptr::null_mut();
+                unsafe {{
+                    asm!("mov rdx, rsp", options(nomem, nostack)); // Save old stack
+                    asm!("mov rsp, rax; mov rbp, rsp", in("rax") SYSCALL_SP, options(nostack)); // Load kernel stack
+                    asm!("", out("rdx") SYSCALL_USP, options(nostack)); // Save old stack into variable for later
+                                                            // asm!("", out("rdx") cpu, options(nostack)); // Load address into pointer for cpu snapshot
+
+                    asm!("", out("rdx") cpu, options(nostack)); // Load address into pointer for cpu snapshot
+
+                    asm!("mov rax, cr3", out("rax") SYSCALL_UMAP, options(nostack)); // Save old address space
+
+                    interrupt(&mut stack_frame, &*cpu, {0});
+
+                    asm!("mov cr3, rax", in("rax") SYSCALL_UMAP, options(nostack));
+                    asm!("mov rsp, rax", in("rax") SYSCALL_USP, options(nostack));
+                }}
+
+                APIC.lock().send_eoi();
+                interrupt_end!(sti);
+            }}
+            "#,
+            i
+        ).as_str());
+    }
+    TokenStream::from_str(st.as_str()).unwrap()
+}
+
+#[proc_macro]
+pub fn set_isrs(tokens: TokenStream) -> TokenStream {
+    let ident = tokens.to_string();
+    let mut st = String::new();
+    for i in 0x20u8..0xFF {
+        st.push_str(format!("{}[{1}].set_handler_fn(_isr_{1}).set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);\n", ident, i).as_str());
+    }
+    TokenStream::from_str(st.as_str()).unwrap()
+}

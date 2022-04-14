@@ -9,9 +9,8 @@ use std::{
 
 use boot_fs::FileHeader;
 
-const DRIVERS: &'static [&str] = &["libfile_system.a", "libpci.a"];
-const DRIVER_PATH: &str =
-    "D:\\Developement\\Projects\\RustKernel\\target\\x86_64-unknown-linux-musl\\debug";
+const DRIVERS: &'static [&str] = &["file_system", "libpci.a"];
+const DRIVER_PATH: &str = "D:\\Developement\\Projects\\RustKernel\\target\\driver_target\\debug";
 
 const CDRIVERS: &'static [&str] = &["driver"];
 const CDRIVER_PATH: &str = "D:\\Developement\\Projects\\RustKernel\\drivers-c\\c_driver";
@@ -26,16 +25,16 @@ fn main() {
     let files: Vec<PathBuf> = OTHER
         .iter()
         .map(|f| PathBuf::from_str(f).unwrap()) // Make sure kernel is first or everything breaks (I don't want a driver to be loaded as ther kernel :)
-        .chain(
-            CDRIVERS
-                .iter()
-                .map(|f| PathBuf::from_str(CDRIVER_PATH).unwrap().join(f)),
-        )
         // .chain(
-        //     DRIVERS
+        //     CDRIVERS
         //         .iter()
-        //         .map(|f| PathBuf::from_str(DRIVER_PATH).unwrap().join(f)),
+        //         .map(|f| PathBuf::from_str(CDRIVER_PATH).unwrap().join(f)),
         // )
+        .chain(
+            DRIVERS
+                .iter()
+                .map(|f| PathBuf::from_str(DRIVER_PATH).unwrap().join(f)),
+        )
         .collect();
     let mut file_headers = vec![];
     let mut offset = size_of::<FileHeader>() * MAX_FILES + size_of::<u32>();
